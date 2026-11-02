@@ -1,0 +1,55 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod lyrics;
+mod media;
+mod ui;
+mod window;
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use eframe::egui;
+
+use lyrics::LyricsState;
+use media::{start_media_poller, MediaTrack};
+use ui::NotchApp;
+use window::ScreenGeometry;
+
+fn main() -> eframe::Result<()> {
+    let geom = ScreenGeometry::current();
+    let initial_width = 300.0;
+    let initial_height = 36.0;
+    let initial_x = (geom.screen_width - initial_width) / 2.0;
+    let initial_y = 0.0;
+
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title("Notch Island")
+            .with_decorations(false)
+            .with_transparent(true)
+            .with_always_on_top()
+            .with_resizable(false)
+            .with_inner_size(egui::vec2(initial_width, initial_height))
+            .with_position(egui::pos2(initial_x, initial_y)),
+        ..Default::default()
+    };
+
+    let shared_media = Arc::new(Mutex::new(MediaTrack::default()));
+    let shared_lyrics = Arc::new(Mutex::new(LyricsState::default()));
+    let lyrics_cache = Arc::new(Mutex::new(HashMap::new()));
+
+    // Start background Windows GSMTC Media Poller
+    start_media_poller(Arc::clone(&shared_media));
+
+    eframe::run_native(
+        "Notch Island",
+        native_options,
+        Box::new(|_cc| {
+            Ok(Box::new(NotchApp::new(
+                shared_media,
+                shared_lyrics,
+                lyrics_cache,
+            )))
+        }),
+    )
+}
+
