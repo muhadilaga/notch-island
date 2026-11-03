@@ -6,6 +6,7 @@ use egui::{
     Sense, Stroke,
 };
 
+use crate::config::AppConfig;
 use crate::lyrics::{fetch_lyrics_async, LyricLine, LyricsState, SharedLyrics};
 use crate::media::{seek_media_position, send_media_command, MediaTrack, SharedMedia};
 use crate::window::{DisplayMode, ScreenGeometry};
@@ -33,15 +34,16 @@ impl NotchApp {
         shared_media: SharedMedia,
         shared_lyrics: SharedLyrics,
         lyrics_cache: Arc<Mutex<HashMap<String, Vec<LyricLine>>>>,
+        config: AppConfig,
     ) -> Self {
         Self {
             shared_media,
             shared_lyrics,
             lyrics_cache,
-            mode: DisplayMode::MinimalBezel,
+            mode: config.mode,
             is_expanded: false,
-            show_lyrics: false,
-            is_pinned: false,
+            show_lyrics: config.show_lyrics,
+            is_pinned: config.is_pinned,
             demo_mode: false,
             demo_track_idx: 0,
             geometry: ScreenGeometry::current(),
@@ -51,6 +53,17 @@ impl NotchApp {
             last_applied_size: (-1.0, -1.0),
             last_applied_pos: (-999.0, -999.0),
         }
+    }
+
+    /// Persist the current display preferences to disk (best-effort,
+    /// never fails the UI). Call after any persisted toggle changes.
+    fn save_config(&self) {
+        AppConfig {
+            mode: self.mode,
+            is_pinned: self.is_pinned,
+            show_lyrics: self.show_lyrics,
+        }
+        .save();
     }
 
     fn apply_demo_track(&mut self) {
@@ -351,6 +364,7 @@ impl NotchApp {
                         .clicked()
                     {
                         self.is_pinned = !self.is_pinned;
+                        self.save_config();
                     }
 
                     // Mode switch: Bar vs Island
@@ -371,12 +385,14 @@ impl NotchApp {
                         .clicked()
                     {
                         self.mode = DisplayMode::FloatingIsland;
+                        self.save_config();
                     }
                     if ui
                         .add(egui::Button::new(RichText::new("━ Bar").font(FontId::proportional(11.0)).color(bar_fg)).fill(bar_bg))
                         .clicked()
                     {
                         self.mode = DisplayMode::MinimalBezel;
+                        self.save_config();
                     }
 
                     // Demo track button
@@ -559,6 +575,7 @@ impl NotchApp {
                         .clicked()
                     {
                         self.show_lyrics = !self.show_lyrics;
+                        self.save_config();
                         if self.show_lyrics && lyrics.lines.is_empty() && !lyrics.is_loading {
                             self.shared_lyrics.lock().unwrap().current_key.clear();
                             fetch_lyrics_async(

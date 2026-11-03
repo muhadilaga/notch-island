@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod config;
 mod lyrics;
 mod media;
 mod ui;
@@ -8,6 +9,8 @@ mod window;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use eframe::egui;
+
+use config::AppConfig;
 
 use lyrics::LyricsState;
 use media::{start_media_poller, MediaTrack};
@@ -37,6 +40,10 @@ fn main() -> eframe::Result<()> {
     let shared_lyrics = Arc::new(Mutex::new(LyricsState::default()));
     let lyrics_cache = Arc::new(Mutex::new(HashMap::new()));
 
+    // Load persisted preferences (mode, pin, lyrics toggle); defaults
+    // when the config file is missing or unreadable.
+    let config = AppConfig::load();
+
     // Start background Windows GSMTC Media Poller
     start_media_poller(Arc::clone(&shared_media));
 
@@ -48,6 +55,7 @@ fn main() -> eframe::Result<()> {
                 shared_media,
                 shared_lyrics,
                 lyrics_cache,
+                config,
             )))
         }),
     )
