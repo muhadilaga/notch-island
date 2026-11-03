@@ -49,7 +49,8 @@ impl Default for TodoState {
 }
 
 /// Local calendar day as `YYYY-MM-DD` (for the daily session reset).
-fn today_key() -> String {
+/// Shared with the water reminder, which resets its counter the same way.
+pub(crate) fn today_key() -> String {
     unsafe {
         let st = GetLocalTime();
         format!("{:04}-{:02}-{:02}", st.wYear, st.wMonth, st.wDay)
@@ -278,6 +279,7 @@ mod tests {
         let config: AppConfig = serde_json::from_str(old_config_json).unwrap();
         assert_eq!(config.focus_mins, 25);
         assert_eq!(config.break_mins, 5);
+        assert_eq!(config.water_mins, 60);
         assert!(config.show_lyrics);
     }
 }

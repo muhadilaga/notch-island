@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use egui::{
     vec2, Align, Color32, CornerRadius, FontId, Layout, Pos2, Rect, RichText, ScrollArea,
     Sense, Stroke,
@@ -10,8 +10,19 @@ use crate::config::AppConfig;
 use crate::interact::{NotchRect, SharedInteract};
 use crate::lyrics::{fetch_lyrics_async, LyricLine, LyricsState, SharedLyrics};
 use crate::media::{seek_media_position, send_media_command, MediaTrack, SharedMedia};
+use crate::shelf::{open_file, ShelfState};
 use crate::todo::{PomodoroPhase, PomodoroTimer, TodoState};
+use crate::water::WaterState;
 use crate::window::{DisplayMode, ScreenGeometry};
+
+/// Which content the expanded panel shows. Music is the default;
+/// Todo and Shelf are alternate views (music keeps playing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelView {
+    Music,
+    Todo,
+    Shelf,
+}
 
 pub struct NotchApp {
     pub shared_media: SharedMedia,
@@ -29,12 +40,16 @@ pub struct NotchApp {
     pub hover_exit_instant: Option<Instant>,
     pub last_applied_size: (f32, f32),
     pub last_applied_pos: (f32, f32),
-    pub show_todo: bool,
+    pub view: PanelView,
     pub todo: TodoState,
     pub todo_input: String,
     pub pomodoro: PomodoroTimer,
     pub focus_mins: u64,
     pub break_mins: u64,
+    pub water: WaterState,
+    pub water_next_due: Instant,
+    pub water_mins: u64,
+    pub shelf: ShelfState,
 }
 
 impl NotchApp {
@@ -45,6 +60,8 @@ impl NotchApp {
         config: AppConfig,
         shared_interact: SharedInteract,
         todo_state: TodoState,
+        water_state: WaterState,
+        shelf_state: ShelfState,
     ) -> Self {
         Self {
             shared_media,
@@ -62,12 +79,16 @@ impl NotchApp {
             hover_exit_instant: None,
             last_applied_size: (-1.0, -1.0),
             last_applied_pos: (-999.0, -999.0),
-            show_todo: false,
+            view: PanelView::Music,
             todo: todo_state,
             todo_input: String::new(),
             pomodoro: PomodoroTimer::new(config.focus_mins),
             focus_mins: config.focus_mins,
             break_mins: config.break_mins,
+            water: water_state,
+            water_next_due: Instant::now() + Duration::from_secs(config.water_mins * 60),
+            water_mins: config.water_mins,
+            shelf: shelf_state,
         }
     }
 
@@ -79,8 +100,14 @@ impl NotchApp {
             show_lyrics: self.show_lyrics,
             focus_mins: self.focus_mins,
             break_mins: self.break_mins,
+            water_mins: self.water_mins,
         }
         .save();
+    }
+
+    /// True when the water reminder interval has elapsed.
+    fn water_due(&self) -> bool {
+        Instant::now() >= self.water_next_due
     }
 
     fn apply_demo_track(&mut self) {
@@ -147,9 +174,31 @@ impl eframe::App for NotchApp {
             }
         }
 
+        // File shelf: terima file yang di-drop ke window. Dedupe di
+        // ShelfState::add menahan event drop yang berulang.
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        if !dropped.is_empty() {
+            let mut changed = false;
+            for f in dropped {
+                if let Some(path) = f.path {
+                    if self.shelf.add(&path) {
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                self.shelf.save();
+            }
+        }
+
         // Dinamis sesuaikan ukuran viewport window hanya ketika berubah
         let ppp = ctx.pixels_per_point().max(1.0);
-        let has_active_lyrics = self.show_lyrics || (!lyrics_state.lines.is_empty() && current_track.is_playing);
+        let has_active_lyrics = self.show_lyrics
+            || (!lyrics_state.lines.is_empty() && current_track.is_playing)
+            // Todo/Shelf views need the tall panel too, or their
+            // content would clip at the 165 px short height. (Only
+            // while expanded: collapsing keeps the normal bar width.)
+            || (self.view != PanelView::Music && self.is_expanded);
         // Thin line: window foreground maximized -> garis tipis, kecuali
         // sedang mengembang (hover) agar tetap bisa diinteraksi.
         let maximized_fg = self
@@ -266,10 +315,14 @@ impl eframe::App for NotchApp {
                     .show(ui, |ui| {
                         if !self.is_expanded {
                             self.render_collapsed_notch(ui, &current_track, &lyrics_state);
-                        } else if self.show_todo {
-                            self.render_todo_view(ui);
                         } else {
-                            self.render_expanded_notch(ui, &current_track, &lyrics_state);
+                            match self.view {
+                                PanelView::Music => {
+                                    self.render_expanded_notch(ui, &current_track, &lyrics_state);
+                                }
+                                PanelView::Todo => self.render_todo_view(ui),
+                                PanelView::Shelf => self.render_shelf_view(ui),
+                            }
                         }
                     });
             });
@@ -314,6 +367,13 @@ impl NotchApp {
                 (format!("{} • {}", track.title, track.artist), false)
             } else {
                 ("Notch Island • Standby".to_string(), false)
+            };
+
+            // Water reminder: prefix droplet when a glass is due.
+            let display_text = if self.water_due() {
+                format!("💧 {}", display_text)
+            } else {
+                display_text
             };
 
             // Hitung lebar teks yang tersedia agar pas di dalam bar tanpa terpotong kaku
@@ -455,7 +515,15 @@ impl NotchApp {
                         .button(RichText::new("✅ Todo").font(FontId::proportional(11.0)).color(Color32::from_rgb(140, 220, 160)))
                         .clicked()
                     {
-                        self.show_todo = true;
+                        self.view = PanelView::Todo;
+                    }
+
+                    // File shelf view
+                    if ui
+                        .button(RichText::new("📁 Shelf").font(FontId::proportional(11.0)).color(Color32::from_rgb(200, 180, 120)))
+                        .clicked()
+                    {
+                        self.view = PanelView::Shelf;
                     }
                 });
             });
@@ -643,6 +711,39 @@ impl NotchApp {
                 });
             });
 
+            // Water reminder row: glass count + drink button. When
+            // due, the row turns into a highlighted reminder.
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.add_space(14.0);
+                let due = self.water_due();
+                let (water_text, water_color) = if due {
+                    (
+                        "💧 Waktunya minum!".to_string(),
+                        Color32::from_rgb(100, 210, 255),
+                    )
+                } else {
+                    (
+                        format!("💧 Minum: {} gelas hari ini", self.water.count_today),
+                        Color32::from_rgb(150, 155, 165),
+                    )
+                };
+                ui.label(
+                    RichText::new(water_text)
+                        .font(FontId::proportional(11.0))
+                        .color(water_color),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.add_space(14.0);
+                    if ui.button(RichText::new("🚰 Sudah minum").font(FontId::proportional(11.0))).clicked() {
+                        self.water.count_today += 1;
+                        self.water_next_due =
+                            Instant::now() + Duration::from_secs(self.water_mins * 60);
+                        self.water.save();
+                    }
+                });
+            });
+
             // 3. Panel Synced Lyrics (jika diaktifkan)
             if self.show_lyrics {
                 ui.add_space(10.0);
@@ -782,7 +883,13 @@ impl NotchApp {
                         .button(RichText::new("🎵 Musik").font(FontId::proportional(11.0)).color(Color32::from_rgb(100, 210, 255)))
                         .clicked()
                     {
-                        self.show_todo = false;
+                        self.view = PanelView::Music;
+                    }
+                    if ui
+                        .button(RichText::new("📁 Shelf").font(FontId::proportional(11.0)).color(Color32::from_rgb(200, 180, 120)))
+                        .clicked()
+                    {
+                        self.view = PanelView::Shelf;
                     }
                 });
             });
@@ -904,6 +1011,105 @@ impl NotchApp {
                     }
                     if changed {
                         self.todo.save();
+                    }
+                });
+        });
+    }
+
+    /// File shelf view: files dropped onto the notch, click to open
+    /// with the default app, ✕ to remove. Drop intake happens in
+    /// update() so files can be dropped onto any panel state.
+    fn render_shelf_view(&mut self, ui: &mut egui::Ui) {
+        ui.vertical(|ui| {
+            ui.add_space(8.0);
+
+            // Header: title + view switch + collapse
+            ui.horizontal(|ui| {
+                ui.add_space(12.0);
+                ui.label(
+                    RichText::new("📁 Shelf")
+                        .font(FontId::proportional(13.0))
+                        .color(Color32::WHITE)
+                        .strong(),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.add_space(4.0);
+                    if ui
+                        .button(RichText::new("▲ Tutup").font(FontId::proportional(11.0)).color(Color32::from_rgb(180, 185, 195)))
+                        .clicked()
+                    {
+                        self.is_expanded = false;
+                        self.hover_exit_instant = None;
+                    }
+                    if ui
+                        .button(RichText::new("🎵 Musik").font(FontId::proportional(11.0)).color(Color32::from_rgb(100, 210, 255)))
+                        .clicked()
+                    {
+                        self.view = PanelView::Music;
+                    }
+                    if ui
+                        .button(RichText::new("✅ Todo").font(FontId::proportional(11.0)).color(Color32::from_rgb(140, 220, 160)))
+                        .clicked()
+                    {
+                        self.view = PanelView::Todo;
+                    }
+                });
+            });
+
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.add_space(14.0);
+                ui.label(
+                    RichText::new("Drag & drop file ke notch saat mengembang untuk menyimpannya di sini.")
+                        .font(FontId::proportional(11.0))
+                        .color(Color32::from_rgb(150, 155, 165)),
+                );
+            });
+            ui.add_space(6.0);
+
+            if self.shelf.items.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.add_space(14.0);
+                    ui.label(
+                        RichText::new("Shelf masih kosong.")
+                            .font(FontId::proportional(12.0))
+                            .color(Color32::GRAY),
+                    );
+                });
+            }
+
+            ScrollArea::vertical()
+                .max_height(150.0)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let mut remove_idx: Option<usize> = None;
+                    for (i, item) in self.shelf.items.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.add_space(14.0);
+                            let resp = ui
+                                .add(
+                                    egui::Label::new(
+                                        RichText::new(&item.name)
+                                            .font(FontId::proportional(12.0))
+                                            .color(Color32::from_rgb(225, 230, 240)),
+                                    )
+                                    .sense(Sense::click()),
+                                )
+                                .on_hover_text(&item.path);
+                            if resp.clicked() {
+                                open_file(&item.path);
+                            }
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.add_space(14.0);
+                                if ui.button(RichText::new("✕").font(FontId::proportional(11.0))).clicked() {
+                                    remove_idx = Some(i);
+                                }
+                            });
+                        });
+                    }
+                    if let Some(i) = remove_idx {
+                        self.shelf.items.remove(i);
+                        self.shelf.save();
                     }
                 });
         });

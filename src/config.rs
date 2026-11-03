@@ -26,6 +26,8 @@ pub struct AppConfig {
     pub focus_mins: u64,
     #[serde(default = "default_break_mins")]
     pub break_mins: u64,
+    #[serde(default = "default_water_mins")]
+    pub water_mins: u64,
 }
 
 fn default_focus_mins() -> u64 {
@@ -36,6 +38,10 @@ fn default_break_mins() -> u64 {
     5
 }
 
+fn default_water_mins() -> u64 {
+    60
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -43,6 +49,7 @@ impl Default for AppConfig {
             show_lyrics: false,
             focus_mins: default_focus_mins(),
             break_mins: default_break_mins(),
+            water_mins: default_water_mins(),
         }
     }
 }

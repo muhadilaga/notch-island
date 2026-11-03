@@ -4,8 +4,10 @@ mod config;
 mod interact;
 mod lyrics;
 mod media;
+mod shelf;
 mod todo;
 mod ui;
+mod water;
 mod window;
 
 use std::collections::HashMap;
@@ -14,7 +16,9 @@ use eframe::egui;
 
 use config::AppConfig;
 use interact::{spawn_interact_threads, InteractState, SharedInteract};
+use shelf::ShelfState;
 use todo::TodoState;
+use water::WaterState;
 
 use lyrics::LyricsState;
 use media::{start_media_poller, MediaTrack};
@@ -53,6 +57,10 @@ fn main() -> eframe::Result<()> {
     // unreadable.
     let todo_state = TodoState::load();
 
+    // Load persisted water count + file shelf (own files).
+    let water_state = WaterState::load();
+    let shelf_state = ShelfState::load();
+
     // Start Win32 interact threads (click-through mouse hook +
     // fullscreen watcher) alongside the media poller below.
     let shared_interact: SharedInteract = Arc::new(Mutex::new(InteractState::default()));
@@ -72,6 +80,8 @@ fn main() -> eframe::Result<()> {
                 config,
                 shared_interact,
                 todo_state,
+                water_state,
+                shelf_state,
             )))
         }),
     )
