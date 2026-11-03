@@ -242,28 +242,53 @@ impl eframe::App for NotchApp {
             false,
         );
 
-        if (target_w - self.last_applied_size.0).abs() > 0.5
-            || (target_h - self.last_applied_size.1).abs() > 0.5
-        {
+        // Morph animation (ala Nusa): window size/position ease toward
+        // the target each frame instead of jumping instantly. Factor
+        // 0.4 per frame (~30 ms) converges in ~300 ms; snaps under
+        // 0.5 px. First frame snaps (sentinel init) so launch behavior
+        // is unchanged; only later resizes animate.
+        if self.last_applied_size.0 < 0.0 {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(vec2(target_w, target_h)));
-            self.last_applied_size = (target_w, target_h);
-        }
-
-        if (x - self.last_applied_pos.0).abs() > 0.5
-            || (y - self.last_applied_pos.1).abs() > 0.5
-        {
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(Pos2::new(x, y)));
+            self.last_applied_size = (target_w, target_h);
             self.last_applied_pos = (x, y);
+        } else {
+            let step = |cur: f32, tgt: f32| -> f32 {
+                let next = cur + (tgt - cur) * 0.4;
+                if (tgt - next).abs() < 0.5 {
+                    tgt
+                } else {
+                    next
+                }
+            };
+            let new_w = step(self.last_applied_size.0, target_w);
+            let new_h = step(self.last_applied_size.1, target_h);
+            let new_x = step(self.last_applied_pos.0, x);
+            let new_y = step(self.last_applied_pos.1, y);
+            if (new_w - self.last_applied_size.0).abs() > 0.01
+                || (new_h - self.last_applied_size.1).abs() > 0.01
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(vec2(new_w, new_h)));
+                self.last_applied_size = (new_w, new_h);
+            }
+            if (new_x - self.last_applied_pos.0).abs() > 0.01
+                || (new_y - self.last_applied_pos.1).abs() > 0.01
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(Pos2::new(new_x, new_y)));
+                self.last_applied_pos = (new_x, new_y);
+            }
         }
 
         // Publish rect notch (piksel fisik) untuk mouse hook
         // click-through: kursor di dalam rect -> interaktif, di luar -> tembus.
+        // Rect mengikuti ukuran/posisi YANG DITERAPKAN (bukan target),
+        // agar klik tetap akurat selama animasi morph.
         if let Ok(mut s) = self.shared_interact.lock() {
             s.rect = Some(NotchRect {
-                x: (x * ppp) as i32,
-                y: (y * ppp) as i32,
-                w: (target_w * ppp) as i32,
-                h: (target_h * ppp) as i32,
+                x: (self.last_applied_pos.0 * ppp) as i32,
+                y: (self.last_applied_pos.1 * ppp) as i32,
+                w: (self.last_applied_size.0 * ppp) as i32,
+                h: (self.last_applied_size.1 * ppp) as i32,
             });
         }
 
