@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config;
+mod interact;
 mod lyrics;
 mod media;
 mod ui;
@@ -11,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use eframe::egui;
 
 use config::AppConfig;
+use interact::{spawn_interact_threads, InteractState, SharedInteract};
 
 use lyrics::LyricsState;
 use media::{start_media_poller, MediaTrack};
@@ -40,9 +42,14 @@ fn main() -> eframe::Result<()> {
     let shared_lyrics = Arc::new(Mutex::new(LyricsState::default()));
     let lyrics_cache = Arc::new(Mutex::new(HashMap::new()));
 
-    // Load persisted preferences (mode, pin, lyrics toggle); defaults
+    // Load persisted preferences (mode, lyrics toggle); defaults
     // when the config file is missing or unreadable.
     let config = AppConfig::load();
+
+    // Start Win32 interact threads (click-through mouse hook +
+    // fullscreen watcher) alongside the media poller below.
+    let shared_interact: SharedInteract = Arc::new(Mutex::new(InteractState::default()));
+    spawn_interact_threads(Arc::clone(&shared_interact));
 
     // Start background Windows GSMTC Media Poller
     start_media_poller(Arc::clone(&shared_media));
@@ -56,6 +63,7 @@ fn main() -> eframe::Result<()> {
                 shared_lyrics,
                 lyrics_cache,
                 config,
+                shared_interact,
             )))
         }),
     )

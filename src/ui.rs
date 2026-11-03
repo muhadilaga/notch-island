@@ -7,6 +7,7 @@ use egui::{
 };
 
 use crate::config::AppConfig;
+use crate::interact::{NotchRect, SharedInteract};
 use crate::lyrics::{fetch_lyrics_async, LyricLine, LyricsState, SharedLyrics};
 use crate::media::{seek_media_position, send_media_command, MediaTrack, SharedMedia};
 use crate::window::{DisplayMode, ScreenGeometry};
@@ -15,10 +16,10 @@ pub struct NotchApp {
     pub shared_media: SharedMedia,
     pub shared_lyrics: SharedLyrics,
     pub lyrics_cache: Arc<Mutex<HashMap<String, Vec<LyricLine>>>>,
+    pub shared_interact: SharedInteract,
     pub mode: DisplayMode,
     pub is_expanded: bool,
     pub show_lyrics: bool,
-    pub is_pinned: bool,
     pub demo_mode: bool,
     pub demo_track_idx: usize,
     pub geometry: ScreenGeometry,
@@ -35,15 +36,16 @@ impl NotchApp {
         shared_lyrics: SharedLyrics,
         lyrics_cache: Arc<Mutex<HashMap<String, Vec<LyricLine>>>>,
         config: AppConfig,
+        shared_interact: SharedInteract,
     ) -> Self {
         Self {
             shared_media,
             shared_lyrics,
             lyrics_cache,
+            shared_interact,
             mode: config.mode,
             is_expanded: false,
             show_lyrics: config.show_lyrics,
-            is_pinned: config.is_pinned,
             demo_mode: false,
             demo_track_idx: 0,
             geometry: ScreenGeometry::current(),
@@ -60,7 +62,6 @@ impl NotchApp {
     fn save_config(&self) {
         AppConfig {
             mode: self.mode,
-            is_pinned: self.is_pinned,
             show_lyrics: self.show_lyrics,
         }
         .save();
@@ -124,11 +125,20 @@ impl eframe::App for NotchApp {
         // Dinamis sesuaikan ukuran viewport window hanya ketika berubah
         let ppp = ctx.pixels_per_point().max(1.0);
         let has_active_lyrics = self.show_lyrics || (!lyrics_state.lines.is_empty() && current_track.is_playing);
+        // Thin line: window foreground maximized -> garis tipis, kecuali
+        // sedang mengembang (hover) agar tetap bisa diinteraksi.
+        let maximized_fg = self
+            .shared_interact
+            .lock()
+            .map(|s| s.maximized_fg)
+            .unwrap_or(false);
+        let thin_line = maximized_fg && !self.is_expanded;
         let (x, y, target_w, target_h) = self.geometry.calculate_window_rect(
             self.mode,
             self.is_expanded,
             has_active_lyrics,
             ppp,
+            thin_line,
         );
 
         if (target_w - self.last_applied_size.0).abs() > 0.5
@@ -145,6 +155,17 @@ impl eframe::App for NotchApp {
             self.last_applied_pos = (x, y);
         }
 
+        // Publish rect notch (piksel fisik) untuk mouse hook
+        // click-through: kursor di dalam rect -> interaktif, di luar -> tembus.
+        if let Ok(mut s) = self.shared_interact.lock() {
+            s.rect = Some(NotchRect {
+                x: (x * ppp) as i32,
+                y: (y * ppp) as i32,
+                w: (target_w * ppp) as i32,
+                h: (target_h * ppp) as i32,
+            });
+        }
+
         // Frame rendering transparan
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(Color32::TRANSPARENT))
@@ -159,7 +180,7 @@ impl eframe::App for NotchApp {
                         self.is_expanded = true;
                         self.hover_exit_instant = None;
                     }
-                } else if !self.is_pinned {
+                } else {
                     if is_hovered {
                         self.hover_exit_instant = None;
                     } else {
@@ -173,6 +194,16 @@ impl eframe::App for NotchApp {
                             }
                         }
                     }
+                }
+
+                // Thin line (maximized): garis hitam tipis tanpa konten,
+                // tapi tetap bisa di-hover untuk mengembang.
+                if thin_line {
+                    egui::Frame::NONE
+                        .fill(Color32::from_rgb(10, 12, 16))
+                        .corner_radius(CornerRadius::same(4))
+                        .show(ui, |ui| {});
+                    return;
                 }
 
                 // Radius kontainer notch
@@ -319,7 +350,7 @@ impl NotchApp {
         ui.vertical(|ui| {
             ui.add_space(8.0);
 
-            // Header Bar: Source App + Mode Switcher + Pin + Close
+            // Header Bar: Source App + Mode Switcher + Close
             ui.horizontal(|ui| {
                 ui.add_space(12.0);
 
@@ -351,20 +382,6 @@ impl NotchApp {
                     {
                         self.is_expanded = false;
                         self.hover_exit_instant = None;
-                    }
-
-                    // Pin toggle
-                    let pin_color = if self.is_pinned {
-                        Color32::from_rgb(255, 204, 0)
-                    } else {
-                        Color32::from_rgb(120, 125, 135)
-                    };
-                    if ui
-                        .button(RichText::new(if self.is_pinned { "📌 Pin" } else { "Pin" }).color(pin_color).font(FontId::proportional(11.0)))
-                        .clicked()
-                    {
-                        self.is_pinned = !self.is_pinned;
-                        self.save_config();
                     }
 
                     // Mode switch: Bar vs Island

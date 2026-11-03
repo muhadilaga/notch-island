@@ -37,9 +37,16 @@ impl ScreenGeometry {
         is_expanded: bool,
         has_lyrics: bool,
         pixels_per_point: f32,
+        thin_line: bool,
     ) -> (f32, f32, f32, f32) {
         let ppp = if pixels_per_point > 0.0 { pixels_per_point } else { 1.0 };
         let logical_screen_w = self.screen_width / ppp;
+
+        if thin_line {
+            // Garis tipis ala Nusa Minimal notch: tetap terlihat dan
+            // tetap bisa di-hover, tanpa teks atau konten.
+            return ((logical_screen_w - 280.0) / 2.0, 0.0, 280.0, 8.0);
+        }
 
         let width = if is_expanded {
             if has_lyrics { 580.0 } else { 460.0 }

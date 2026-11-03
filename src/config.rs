@@ -18,7 +18,6 @@ use crate::window::DisplayMode;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub mode: DisplayMode,
-    pub is_pinned: bool,
     pub show_lyrics: bool,
 }
 
@@ -26,7 +25,6 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             mode: DisplayMode::MinimalBezel,
-            is_pinned: false,
             show_lyrics: false,
         }
     }
