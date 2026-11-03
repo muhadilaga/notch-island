@@ -7,6 +7,7 @@ mod media;
 mod shelf;
 mod todo;
 mod ui;
+mod volume;
 mod water;
 mod window;
 

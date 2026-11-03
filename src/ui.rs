@@ -12,6 +12,7 @@ use crate::lyrics::{fetch_lyrics_async, LyricLine, LyricsState, SharedLyrics};
 use crate::media::{seek_media_position, send_media_command, MediaTrack, SharedMedia};
 use crate::shelf::{open_file, ShelfState};
 use crate::todo::{PomodoroPhase, PomodoroTimer, TodoState};
+use crate::volume::{get_system_volume, set_system_volume};
 use crate::water::WaterState;
 use crate::window::{DisplayMode, ScreenGeometry};
 
@@ -50,6 +51,7 @@ pub struct NotchApp {
     pub water_next_due: Instant,
     pub water_mins: u64,
     pub shelf: ShelfState,
+    pub volume: f32,
 }
 
 impl NotchApp {
@@ -89,6 +91,7 @@ impl NotchApp {
             water_next_due: Instant::now() + Duration::from_secs(config.water_mins * 60),
             water_mins: config.water_mins,
             shelf: shelf_state,
+            volume: get_system_volume().unwrap_or(0.5),
         }
     }
 
@@ -709,6 +712,32 @@ impl NotchApp {
                         }
                     }
                 });
+            });
+
+            // Volume slider: system volume (default audio endpoint).
+            // Applies live per whole-percent step; external volume
+            // changes (keyboard keys, other apps) are NOT reflected
+            // until restart (v1 limitation).
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.add_space(14.0);
+                ui.label(RichText::new("🔊").font(FontId::proportional(12.0)));
+                let mut vol = (self.volume * 100.0).round();
+                ui.spacing_mut().slider_width = (ui.available_width() - 70.0).max(60.0);
+                let resp = ui.add(
+                    egui::Slider::new(&mut vol, 0.0..=100.0)
+                        .show_value(false),
+                );
+                if resp.changed() {
+                    self.volume = vol.round() / 100.0;
+                    set_system_volume(self.volume);
+                }
+                ui.label(
+                    RichText::new(format!("{}%", (self.volume * 100.0).round() as i32))
+                        .font(FontId::proportional(11.0))
+                        .color(Color32::from_rgb(150, 155, 165)),
+                );
+                ui.add_space(14.0);
             });
 
             // Water reminder row: glass count + drink button. When
