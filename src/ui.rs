@@ -202,7 +202,7 @@ impl eframe::App for NotchApp {
                     egui::Frame::NONE
                         .fill(Color32::from_rgb(10, 12, 16))
                         .corner_radius(CornerRadius::same(4))
-                        .show(ui, |ui| {});
+                        .show(ui, |_ui| {});
                     return;
                 }
 

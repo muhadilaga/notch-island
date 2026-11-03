@@ -123,7 +123,7 @@ pub fn spawn_interact_threads(state: SharedInteract) {
         };
         if is_fs && !*hidden {
             unsafe {
-                SetWindowPos(
+                let _ = SetWindowPos(
                     own,
                     HWND::default(),
                     0,
@@ -136,7 +136,7 @@ pub fn spawn_interact_threads(state: SharedInteract) {
             *hidden = true;
         } else if !is_fs && *hidden {
             unsafe {
-                SetWindowPos(
+                let _ = SetWindowPos(
                     own,
                     HWND::default(),
                     0,
@@ -176,7 +176,9 @@ unsafe extern "system" fn mouse_hook_proc(
 ) -> LRESULT {
     if code >= 0 {
         if let Some(g) = GLOBALS.get() {
-            let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
+            // Edisi Rust 2024: deref raw pointer butuh blok unsafe eksplisit
+            // walau sudah di dalam fn unsafe.
+            let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
             let (cx, cy) = (info.pt.x, info.pt.y);
             let inside = match g.state.lock() {
                 Ok(s) => match s.rect {
@@ -199,7 +201,8 @@ unsafe extern "system" fn mouse_hook_proc(
             }
         }
     }
-    CallNextHookEx(stored_hook(), code, _wparam, lparam)
+    // Edisi Rust 2024: panggil unsafe fn butuh blok unsafe eksplisit.
+    unsafe { CallNextHookEx(stored_hook(), code, _wparam, lparam) }
 }
 
 fn set_click_through(hwnd: HWND, enable: bool) {
@@ -213,7 +216,7 @@ fn set_click_through(hwnd: HWND, enable: bool) {
         }
         if next != cur {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next.0 as isize);
-            SetWindowPos(
+            let _ = SetWindowPos(
                 hwnd,
                 HWND::default(),
                 0,
