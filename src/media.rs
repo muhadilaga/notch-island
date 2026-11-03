@@ -42,35 +42,53 @@ pub fn start_media_poller(shared: SharedMedia) {
 
         let mut simulated_ms: u64 = 0;
         let mut last_real_update = std::time::Instant::now();
+        // Sesi terakhir diketahui ada (poll asli terakhir berhasil).
+        // Interpolasi hanya boleh jalan saat ini true.
+        let mut session_alive = false;
+        let mut tick: u64 = 0;
 
         loop {
-            std::thread::sleep(Duration::from_millis(500));
-            
-            let fetch_res = poll_windows_media();
+            // Tick 100 ms: poll asli tiap 5 tick (500 ms, seperti
+            // semula); antar poll, posisi diinterpolasi halus hanya
+            // saat sesi ada dan status Playing.
+            std::thread::sleep(Duration::from_millis(100));
+            tick += 1;
             let mut current = shared.lock().unwrap();
 
-            match fetch_res {
-                Ok(Some(track)) => {
-                    *current = track;
-                    simulated_ms = current.position_ms;
-                    last_real_update = std::time::Instant::now();
-                }
-                Ok(None) => {
-                    // Jika tidak ada session GSMTC, cek apakah dalam mode demo atau standby
-                    if current.is_playing {
-                        // Majukan posisi simulasi
-                        let elapsed = last_real_update.elapsed().as_millis() as u64;
-                        if elapsed > 0 {
-                            simulated_ms += elapsed;
-                            if current.duration_ms > 0 && simulated_ms > current.duration_ms {
-                                simulated_ms = 0;
-                            }
-                            current.position_ms = simulated_ms;
-                            last_real_update = std::time::Instant::now();
-                        }
+            if tick % 5 == 0 {
+                match poll_windows_media() {
+                    Ok(Some(track)) => {
+                        *current = track;
+                        simulated_ms = current.position_ms;
+                        last_real_update = std::time::Instant::now();
+                        session_alive = true;
+                    }
+                    Ok(None) => {
+                        // Sesi HILANG: jangan simulasi jalan terus.
+                        // Dulu cabang ini memajukan posisi selama
+                        // state terakhir playing, sehingga bar musik
+                        // jalan tanpa musik dan lirik ikut highlight.
+                        // Sekarang: bekukan posisi, tandai berhenti.
+                        session_alive = false;
+                        current.is_playing = false;
+                    }
+                    Err(_) => {
+                        // Poll gagal: jangan interpolasi buta.
+                        session_alive = false;
                     }
                 }
-                Err(_) => {}
+            } else if session_alive && current.is_playing {
+                let elapsed = last_real_update.elapsed().as_millis() as u64;
+                if elapsed > 0 {
+                    simulated_ms = simulated_ms.saturating_add(elapsed);
+                    // Mentok di durasi, jangan wrap ke 0 (poll asli
+                    // berikutnya mengoreksi bila lagu lanjut / ganti).
+                    if current.duration_ms > 0 && simulated_ms > current.duration_ms {
+                        simulated_ms = current.duration_ms;
+                    }
+                    current.position_ms = simulated_ms;
+                    last_real_update = std::time::Instant::now();
+                }
             }
         }
     });

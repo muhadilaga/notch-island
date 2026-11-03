@@ -43,6 +43,16 @@ pub struct NotchApp {
     pub last_track_title: String,
     pub visualizer_phase: f32,
     pub hover_exit_instant: Option<Instant>,
+    /// Latch Ciutkan: setelah Ciutkan diklik, hover di atas bar/pill
+    /// TIDAK boleh langsung mengembang lagi sampai kursor pergi
+    /// (sebelumnya Tutup kelihatan mati karena hover tiap frame
+    /// langsung mengembang lagi).
+    pub collapse_latched: bool,
+    /// Tinggi konten terukur frame sebelumnya untuk Todo / Shelf
+    /// (0 = belum terukur -> pakai default). Dipakai update() agar
+    /// tinggi panel mengikuti konten, bukan dipaksa 300 px.
+    pub measured_todo_h: f32,
+    pub measured_shelf_h: f32,
     pub last_applied_size: (f32, f32),
     pub last_applied_pos: (f32, f32),
     pub view: PanelView,
@@ -84,6 +94,9 @@ impl NotchApp {
             last_track_title: String::new(),
             visualizer_phase: 0.0,
             hover_exit_instant: None,
+            collapse_latched: false,
+            measured_todo_h: 0.0,
+            measured_shelf_h: 0.0,
             last_applied_size: (-1.0, -1.0),
             last_applied_pos: (-999.0, -999.0),
             view: PanelView::Music,
@@ -227,20 +240,36 @@ impl eframe::App for NotchApp {
         let has_active_lyrics = self.show_lyrics
             || (!lyrics_state.lines.is_empty() && current_track.is_playing)
             // Todo/Shelf views need the tall panel too, or their
-            // content would clip at the 165 px short height. (Only
+            // content would clip at the 195 px short height. (Only
             // while expanded: collapsing keeps the normal bar width.)
             || (self.view != PanelView::Music && self.is_expanded);
         // Nusa parity: no thin line. The notch (bar, or expanded panel)
         // stays visible over maximized windows instead of collapsing
         // to an 8 px line, so lyrics/shelf stay reachable. The
         // geometry thin-line path is kept but never triggered.
-        let (x, y, target_w, target_h) = self.geometry.calculate_window_rect(
+        let (x, y, target_w, mut target_h) = self.geometry.calculate_window_rect(
             self.mode,
             self.is_expanded,
             has_active_lyrics,
+            current_track.is_playing,
             ppp,
             false,
         );
+
+        // Todo/Shelf: tinggi mengikuti konten terukur di frame
+        // sebelumnya (diukur di akhir render view; 0 = belum ada
+        // pengukuran -> pakai default dari geometri). Gagal ukur =
+        // tetap tinggi default (tidak lebih buruk dari sekarang).
+        if self.is_expanded {
+            let measured = match self.view {
+                PanelView::Todo => self.measured_todo_h,
+                PanelView::Shelf => self.measured_shelf_h,
+                PanelView::Music => 0.0,
+            };
+            if measured > 0.0 {
+                target_h = (measured + 16.0).clamp(150.0, 300.0);
+            }
+        }
 
         // Morph animation (ala Nusa): window size/position ease toward
         // the target each frame instead of jumping instantly. Factor
@@ -298,13 +327,16 @@ impl eframe::App for NotchApp {
             .show(ctx, |ui| {
                 let max_rect = ui.max_rect();
                 let is_hovered = ui.rect_contains_pointer(max_rect);
-                let primary_clicked = ui.input(|i| i.pointer.primary_clicked());
 
                 // State machine interaksi hover & expand
                 if !self.is_expanded {
-                    if is_hovered || (primary_clicked && is_hovered) {
+                    if is_hovered && !self.collapse_latched {
                         self.is_expanded = true;
                         self.hover_exit_instant = None;
+                    } else if !is_hovered {
+                        // Kursor pergi: lepas latch Ciutkan, hover
+                        // berikutnya boleh mengembang lagi.
+                        self.collapse_latched = false;
                     }
                 } else {
                     if is_hovered {
@@ -322,19 +354,10 @@ impl eframe::App for NotchApp {
                     }
                 }
 
-                // Radius kontainer notch
-                let radius = match self.mode {
-                    DisplayMode::FloatingIsland => {
-                        CornerRadius::same(18)
-                    }
-                    DisplayMode::MinimalBezel => {
-                        if self.is_expanded {
-                            CornerRadius { nw: 0, ne: 0, sw: 20, se: 20 }
-                        } else {
-                            CornerRadius { nw: 0, ne: 0, sw: 16, se: 16 }
-                        }
-                    }
-                };
+                // Radius kontainer notch: satu gaya rounded penuh
+                // ala Nusa untuk semua mode (sebelumnya mode Bar
+                // memakai sudut atas siku, bikin tampilan tak konsisten).
+                let radius = CornerRadius::same(18);
 
                 let bg_color = Color32::from_rgb(10, 12, 16);
                 let border_color = if self.is_expanded {
@@ -362,8 +385,8 @@ impl eframe::App for NotchApp {
                                 PanelView::Music => {
                                     self.render_expanded_notch(ui, &current_track, &lyrics_state);
                                 }
-                                PanelView::Todo => self.render_todo_view(ui),
-                                PanelView::Shelf => self.render_shelf_view(ui),
+                                PanelView::Todo => self.render_todo_view(ui, current_track.is_playing),
+                                PanelView::Shelf => self.render_shelf_view(ui, current_track.is_playing),
                             }
                         }
                     });
@@ -378,6 +401,28 @@ impl NotchApp {
         track: &MediaTrack,
         lyrics: &LyricsState,
     ) {
+        // Mini pill ala Nusa saat idle (tidak playing): hanya dot +
+        // jam HH:MM, bukan bar "Notch Island • Standby". Hover di
+        // atas pill tetap mengembang seperti biasa.
+        if !track.is_playing {
+            ui.centered_and_justified(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("●")
+                            .font(FontId::proportional(11.0))
+                            .color(Color32::from_rgb(52, 199, 89)),
+                    );
+                    ui.label(
+                        RichText::new(Self::now_clock_hhmm())
+                            .font(FontId::proportional(12.0))
+                            .color(Color32::WHITE)
+                            .strong(),
+                    );
+                });
+            });
+            return;
+        }
+
         ui.horizontal_centered(|ui| {
             // Icon sumber media di sisi kiri
             let icon_str = match track.source_app.as_str() {
@@ -768,7 +813,7 @@ impl NotchApp {
                     });
                 } else if lyrics.lines.is_empty() {
                     ui.label(
-                        RichText::new("Lirik tidak tersedia untuk lagu ini.")
+                        RichText::new("Lyrics not available")
                             .font(FontId::proportional(11.0))
                             .color(Color32::GRAY),
                     );
@@ -856,48 +901,87 @@ impl NotchApp {
         )
     }
 
-    fn render_expanded_notch(
+    /// Jam HH:MM lokal untuk mini pill idle (Nusa: pill hanya jam).
+    fn now_clock_hhmm() -> String {
+        use windows::Win32::System::SystemInformation::GetLocalTime;
+        let st = unsafe { GetLocalTime() };
+        format!("{:02}:{:02}", st.wHour, st.wMinute)
+    }
+
+    /// Urutan carousel view: Musik -> Todo -> Shelf -> Musik.
+    fn prev_view(v: PanelView) -> PanelView {
+        match v {
+            PanelView::Music => PanelView::Shelf,
+            PanelView::Todo => PanelView::Music,
+            PanelView::Shelf => PanelView::Todo,
+        }
+    }
+
+    fn next_view(v: PanelView) -> PanelView {
+        match v {
+            PanelView::Music => PanelView::Todo,
+            PanelView::Todo => PanelView::Shelf,
+            PanelView::Shelf => PanelView::Music,
+        }
+    }
+
+    /// Header bersama semua view expanded, ala Nusa: baris jam
+    /// terpusat + baris judul dengan navigasi carousel (panah ‹ ›
+    /// dan titik halaman yang bisa diklik). Menggantikan 3 header
+    /// lama yang tombolnya beda-beda per view, plus tombol Bar /
+    /// Island (nyaris tak mengubah apa-apa: hanya lebar collapsed
+    /// 280 vs 300) dan Demo (tak punya tombol off; track palsunya
+    /// ditimpa poller tiap 500 ms). Mode tampilan kini hanya bisa
+    /// diubah lewat config.json; demo tak lagi bisa diaktifkan
+    /// dari UI (kodenya masih ada tapi tak terjangkau).
+    fn render_view_header(
         &mut self,
         ui: &mut egui::Ui,
-        track: &MediaTrack,
-        lyrics: &LyricsState,
+        title: &str,
+        badge: Option<&str>,
+        is_playing: bool,
     ) {
-        ui.vertical(|ui| {
-            ui.add_space(8.0);
-
-            // Status row ala Nusa (hanya di expanded penuh/lirik):
-            // dot status + tanggal/jam sistem, di tengah baris.
-            // Di panel pendek (165 px, lirik mati) tidak ditampilkan
-            // agar konten musik tidak terpotong.
-            if self.show_lyrics {
-                ui.vertical_centered(|ui| {
-                    ui.horizontal(|ui| {
-                        let dot_color = if track.is_playing {
-                            Color32::from_rgb(52, 199, 89)
-                        } else {
-                            Color32::from_rgb(115, 120, 130)
-                        };
-                        ui.label(
-                            RichText::new("●")
-                                .font(FontId::proportional(10.0))
-                                .color(dot_color),
-                        );
-                        ui.label(
-                            RichText::new(Self::now_header_text())
-                                .font(FontId::proportional(11.0))
-                                .color(Color32::from_rgb(190, 195, 205)),
-                        );
-                    });
-                });
-                ui.add_space(2.0);
-            }
-
-            // Header Bar: Source App + Mode Switcher + Close
+        // Baris 1: dot status + tanggal/jam, di tengah, SEMUA view
+        // (sebelumnya hanya saat lirik aktif).
+        ui.vertical_centered(|ui| {
             ui.horizontal(|ui| {
-                ui.add_space(12.0);
+                let dot_color = if is_playing {
+                    Color32::from_rgb(52, 199, 89)
+                } else {
+                    Color32::from_rgb(115, 120, 130)
+                };
+                ui.label(
+                    RichText::new("●")
+                        .font(FontId::proportional(10.0))
+                        .color(dot_color),
+                );
+                ui.label(
+                    RichText::new(Self::now_header_text())
+                        .font(FontId::proportional(11.0))
+                        .color(Color32::from_rgb(190, 195, 205)),
+                );
+            });
+        });
+        ui.add_space(2.0);
 
-                // Source indicator badge
-                let badge_bg = match track.source_app.as_str() {
+        // Baris 2: [‹] judul (+badge sumber, hanya view Musik)
+        // [titik halaman] [›] ... [▲ Ciutkan].
+        ui.horizontal(|ui| {
+            ui.add_space(12.0);
+            if ui
+                .button(RichText::new("‹").font(FontId::proportional(14.0)))
+                .clicked()
+            {
+                self.view = Self::prev_view(self.view);
+            }
+            ui.label(
+                RichText::new(title)
+                    .font(FontId::proportional(13.0))
+                    .color(Color32::WHITE)
+                    .strong(),
+            );
+            if let Some(source) = badge {
+                let badge_bg = match source {
                     "Spotify" => Color32::from_rgb(30, 80, 45),
                     "Google Chrome" | "Microsoft Edge" => Color32::from_rgb(35, 60, 95),
                     _ => Color32::from_rgb(45, 48, 56),
@@ -908,82 +992,70 @@ impl NotchApp {
                     .inner_margin(egui::Margin::symmetric(6, 2))
                     .show(ui, |ui| {
                         ui.label(
-                            RichText::new(&track.source_app)
+                            RichText::new(source)
                                 .font(FontId::proportional(10.0))
                                 .color(Color32::from_rgb(200, 235, 210)),
                         );
                     });
+            }
+            // Titik halaman carousel (bisa diklik untuk pindah view).
+            for v in [PanelView::Music, PanelView::Todo, PanelView::Shelf] {
+                let (ch, col) = if v == self.view {
+                    ("●", Color32::from_rgb(110, 220, 255))
+                } else {
+                    ("○", Color32::from_rgb(90, 95, 110))
+                };
+                if ui
+                    .add(
+                        egui::Label::new(
+                            RichText::new(ch)
+                                .font(FontId::proportional(9.0))
+                                .color(col),
+                        )
+                        .sense(Sense::click()),
+                    )
+                    .clicked()
+                {
+                    self.view = v;
+                }
+            }
+            if ui
+                .button(RichText::new("›").font(FontId::proportional(14.0)))
+                .clicked()
+            {
+                self.view = Self::next_view(self.view);
+            }
 
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.add_space(4.0);
-
-                    // Tutup (Collapse) button
-                    if ui
-                        .button(RichText::new("▲ Tutup").font(FontId::proportional(11.0)).color(Color32::from_rgb(180, 185, 195)))
-                        .clicked()
-                    {
-                        self.is_expanded = false;
-                        self.hover_exit_instant = None;
-                    }
-
-                    // Mode switch: Bar vs Island
-                    let is_bar = self.mode == DisplayMode::MinimalBezel;
-                    let (bar_bg, bar_fg) = if is_bar {
-                        (Color32::from_rgb(0, 122, 255), Color32::WHITE)
-                    } else {
-                        (Color32::from_rgb(32, 36, 46), Color32::from_rgb(140, 145, 160))
-                    };
-                    let (island_bg, island_fg) = if !is_bar {
-                        (Color32::from_rgb(0, 122, 255), Color32::WHITE)
-                    } else {
-                        (Color32::from_rgb(32, 36, 46), Color32::from_rgb(140, 145, 160))
-                    };
-
-                    if ui
-                        .add(egui::Button::new(RichText::new("🏝 Island").font(FontId::proportional(11.0)).color(island_fg)).fill(island_bg))
-                        .clicked()
-                    {
-                        self.mode = DisplayMode::FloatingIsland;
-                        self.save_config();
-                    }
-                    if ui
-                        .add(egui::Button::new(RichText::new("━ Bar").font(FontId::proportional(11.0)).color(bar_fg)).fill(bar_bg))
-                        .clicked()
-                    {
-                        self.mode = DisplayMode::MinimalBezel;
-                        self.save_config();
-                    }
-
-                    // Demo track button
-                    if ui
-                        .button(RichText::new("🧪 Demo").font(FontId::proportional(11.0)).color(Color32::from_rgb(175, 140, 240)))
-                        .clicked()
-                    {
-                        self.demo_mode = true;
-                        self.demo_track_idx += 1;
-                        self.apply_demo_track();
-                    }
-
-                    // Todo + Pomodoro view (expanded panel only;
-                    // music keeps playing in the background)
-                    if ui
-                        .button(RichText::new("✅ Todo").font(FontId::proportional(11.0)).color(Color32::from_rgb(140, 220, 160)))
-                        .clicked()
-                    {
-                        self.view = PanelView::Todo;
-                    }
-
-                    // File shelf view
-                    if ui
-                        .button(RichText::new("📁 Shelf").font(FontId::proportional(11.0)).color(Color32::from_rgb(200, 180, 120)))
-                        .clicked()
-                    {
-                        self.view = PanelView::Shelf;
-                    }
-                });
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.add_space(4.0);
+                // Ciutkan (bukan keluar; keluar tetap via tray):
+                // latch menahan hover agar tidak langsung mengembang
+                // lagi selama kursor masih di atas bar/pill.
+                if ui
+                    .button(RichText::new("▲ Ciutkan").font(FontId::proportional(11.0)).color(Color32::from_rgb(180, 185, 195)))
+                    .clicked()
+                {
+                    self.is_expanded = false;
+                    self.collapse_latched = true;
+                    self.hover_exit_instant = None;
+                }
             });
+        });
+    }
 
-            ui.add_space(6.0);
+    fn render_expanded_notch(
+        &mut self,
+        ui: &mut egui::Ui,
+        track: &MediaTrack,
+        lyrics: &LyricsState,
+    ) {
+        ui.vertical(|ui| {
+            ui.add_space(8.0);
+
+            // Header bersama (jam terpusat + carousel + Ciutkan).
+            self.render_view_header(ui, "🎵 Musik", Some(track.source_app.as_str()), track.is_playing);
+
+            ui.add_space(8.0);
 
             // Layout: side-by-side ala Nusa saat lirik aktif,
             // kolom tunggal saat lirik mati.
@@ -1013,42 +1085,12 @@ impl NotchApp {
     /// expanded panel while music keeps playing in the background.
     /// v1 scope: visual timer only, no sound; timer state is not
     /// persisted across restarts (only the list + session count are).
-    fn render_todo_view(&mut self, ui: &mut egui::Ui) {
+    fn render_todo_view(&mut self, ui: &mut egui::Ui, is_playing: bool) {
         ui.vertical(|ui| {
             ui.add_space(8.0);
 
-            // Header: title + back to music + collapse
-            ui.horizontal(|ui| {
-                ui.add_space(12.0);
-                ui.label(
-                    RichText::new("✅ Todo & Pomodoro")
-                        .font(FontId::proportional(13.0))
-                        .color(Color32::WHITE)
-                        .strong(),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.add_space(4.0);
-                    if ui
-                        .button(RichText::new("▲ Tutup").font(FontId::proportional(11.0)).color(Color32::from_rgb(180, 185, 195)))
-                        .clicked()
-                    {
-                        self.is_expanded = false;
-                        self.hover_exit_instant = None;
-                    }
-                    if ui
-                        .button(RichText::new("🎵 Musik").font(FontId::proportional(11.0)).color(Color32::from_rgb(100, 210, 255)))
-                        .clicked()
-                    {
-                        self.view = PanelView::Music;
-                    }
-                    if ui
-                        .button(RichText::new("📁 Shelf").font(FontId::proportional(11.0)).color(Color32::from_rgb(200, 180, 120)))
-                        .clicked()
-                    {
-                        self.view = PanelView::Shelf;
-                    }
-                });
-            });
+            // Header bersama (jam terpusat + carousel + Ciutkan).
+            self.render_view_header(ui, "✅ Todo & Pomodoro", None, is_playing);
 
             ui.add_space(8.0);
 
@@ -1132,7 +1174,7 @@ impl NotchApp {
             // Todo list, scrollable so it fits the expanded panel
             ScrollArea::vertical()
                 .max_height(120.0)
-                .auto_shrink([false, false])
+                .auto_shrink([false, true])
                 .show(ui, |ui| {
                     let mut changed = false;
                     let mut remove_idx: Option<usize> = None;
@@ -1169,48 +1211,20 @@ impl NotchApp {
                         self.todo.save();
                     }
                 });
+            // Ukur tinggi konten untuk target geometri frame berikut.
+            self.measured_todo_h = ui.min_rect().height();
         });
     }
 
     /// File shelf view: files dropped onto the notch, click to open
     /// with the default app, ✕ to remove. Drop intake happens in
     /// update() so files can be dropped onto any panel state.
-    fn render_shelf_view(&mut self, ui: &mut egui::Ui) {
+    fn render_shelf_view(&mut self, ui: &mut egui::Ui, is_playing: bool) {
         ui.vertical(|ui| {
             ui.add_space(8.0);
 
-            // Header: title + view switch + collapse
-            ui.horizontal(|ui| {
-                ui.add_space(12.0);
-                ui.label(
-                    RichText::new("📁 Shelf")
-                        .font(FontId::proportional(13.0))
-                        .color(Color32::WHITE)
-                        .strong(),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.add_space(4.0);
-                    if ui
-                        .button(RichText::new("▲ Tutup").font(FontId::proportional(11.0)).color(Color32::from_rgb(180, 185, 195)))
-                        .clicked()
-                    {
-                        self.is_expanded = false;
-                        self.hover_exit_instant = None;
-                    }
-                    if ui
-                        .button(RichText::new("🎵 Musik").font(FontId::proportional(11.0)).color(Color32::from_rgb(100, 210, 255)))
-                        .clicked()
-                    {
-                        self.view = PanelView::Music;
-                    }
-                    if ui
-                        .button(RichText::new("✅ Todo").font(FontId::proportional(11.0)).color(Color32::from_rgb(140, 220, 160)))
-                        .clicked()
-                    {
-                        self.view = PanelView::Todo;
-                    }
-                });
-            });
+            // Header bersama (jam terpusat + carousel + Ciutkan).
+            self.render_view_header(ui, "📁 Shelf", None, is_playing);
 
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -1236,7 +1250,7 @@ impl NotchApp {
 
             ScrollArea::vertical()
                 .max_height(150.0)
-                .auto_shrink([false, false])
+                .auto_shrink([false, true])
                 .show(ui, |ui| {
                     let mut remove_idx: Option<usize> = None;
                     for (i, item) in self.shelf.items.iter().enumerate() {
@@ -1268,6 +1282,8 @@ impl NotchApp {
                         self.shelf.save();
                     }
                 });
+            // Ukur tinggi konten untuk target geometri frame berikut.
+            self.measured_shelf_h = ui.min_rect().height();
         });
     }
 }

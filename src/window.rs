@@ -36,6 +36,7 @@ impl ScreenGeometry {
         mode: DisplayMode,
         is_expanded: bool,
         has_lyrics: bool,
+        is_playing: bool,
         pixels_per_point: f32,
         thin_line: bool,
     ) -> (f32, f32, f32, f32) {
@@ -50,6 +51,10 @@ impl ScreenGeometry {
 
         let width = if is_expanded {
             if has_lyrics { 580.0 } else { 460.0 }
+        } else if !is_playing {
+            // Mini pill idle ala Nusa: dot + jam saja (bukan bar
+            // 280/300 px berisi "Notch Island • Standby").
+            140.0
         } else if has_lyrics {
             380.0
         } else {
@@ -60,7 +65,9 @@ impl ScreenGeometry {
         };
 
         let height = if is_expanded {
-            if has_lyrics { 300.0 } else { 165.0 }
+            // Panel pendek 165 -> 195: ruang baris jam terpusat +
+            // header carousel di semua view (bukan cuma lirik).
+            if has_lyrics { 300.0 } else { 195.0 }
         } else {
             36.0
         };
