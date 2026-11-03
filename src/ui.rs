@@ -718,12 +718,28 @@ impl NotchApp {
                                             FontId::proportional(11.5)
                                         };
 
-                                        let label = ui.label(
-                                            RichText::new(&line.text)
-                                                .font(font)
-                                                .color(text_color)
-                                                .strong(),
+                                        // Klik baris lirik -> seek ke timestamp baris itu
+                                        // (pola sama seperti seek bar: update posisi optimis
+                                        // + seek media asli, kecuali mode Demo).
+                                        let label = ui.add(
+                                            egui::Label::new(
+                                                RichText::new(&line.text)
+                                                    .font(font)
+                                                    .color(text_color)
+                                                    .strong(),
+                                            )
+                                            .sense(Sense::click()),
                                         );
+
+                                        if label.clicked() {
+                                            {
+                                                let mut t = self.shared_media.lock().unwrap();
+                                                t.position_ms = line.time_ms;
+                                            }
+                                            if !self.demo_mode {
+                                                seek_media_position(line.time_ms);
+                                            }
+                                        }
 
                                         if is_current {
                                             label.scroll_to_me(Some(Align::Center));
