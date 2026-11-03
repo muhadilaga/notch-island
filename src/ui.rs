@@ -459,6 +459,366 @@ impl NotchApp {
         });
     }
 
+    /// Kolom musik di panel expanded: judul, progress, kontrol,
+    /// volume, water. Dipakai kolom tunggal (lirik mati) maupun
+    /// kolom kiri (lirik aktif, side-by-side ala Nusa).
+    fn render_music_column(
+        &mut self,
+        ui: &mut egui::Ui,
+        track: &MediaTrack,
+        lyrics: &LyricsState,
+    ) {
+        // Informasi Lagu: Judul & Artist
+        ui.horizontal(|ui| {
+            ui.add_space(14.0);
+            ui.vertical(|ui| {
+                let title_text = if track.title.is_empty() {
+                    "Tidak Ada Musik Aktif"
+                } else {
+                    &track.title
+                };
+                ui.label(
+                    RichText::new(title_text)
+                        .font(FontId::proportional(15.0))
+                        .color(Color32::WHITE)
+                        .strong(),
+                );
+                ui.label(
+                    RichText::new(&track.artist)
+                        .font(FontId::proportional(12.0))
+                        .color(Color32::from_rgb(155, 162, 175)),
+                );
+            });
+        });
+
+        ui.add_space(6.0);
+
+        // Playback Progress Bar & Time (Interactive Seek Bar)
+        ui.horizontal(|ui| {
+            ui.add_space(14.0);
+            let pos_sec = track.position_ms / 1000;
+            let dur_sec = track.duration_ms / 1000;
+
+            ui.label(
+                RichText::new(format!("{:02}:{:02}", pos_sec / 60, pos_sec % 60))
+                    .font(FontId::monospace(10.0))
+                    .color(Color32::from_rgb(140, 145, 155)),
+            );
+
+            let bar_width = (ui.available_width() - 55.0).max(60.0);
+            let (response, painter) = ui.allocate_painter(vec2(bar_width, 14.0), Sense::click_and_drag());
+            let rect = response.rect;
+
+            let is_hover = response.hovered() || response.dragged();
+            let bar_h = if is_hover { 6.0 } else { 4.0 };
+            let bar_rect = Rect::from_center_size(rect.center(), vec2(rect.width(), bar_h));
+
+            let mut current_ratio = if dur_sec > 0 {
+                (track.position_ms as f32 / track.duration_ms as f32).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+
+            // Tangani interaksi klik / drag untuk seek maju mundur
+            if (response.clicked() || response.dragged()) && track.duration_ms > 0 {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let new_ratio = ((pos.x - bar_rect.min.x) / bar_rect.width()).clamp(0.0, 1.0);
+                    let new_pos_ms = (new_ratio * track.duration_ms as f32) as u64;
+
+                    // Update state optimis instan
+                    {
+                        let mut t = self.shared_media.lock().unwrap();
+                        t.position_ms = new_pos_ms;
+                    }
+                    if !self.demo_mode {
+                        seek_media_position(new_pos_ms);
+                    }
+                    current_ratio = new_ratio;
+                }
+            }
+
+            // Gambar background track
+            painter.rect_filled(
+                bar_rect,
+                CornerRadius::same((bar_h / 2.0).round() as u8),
+                Color32::from_rgb(45, 50, 62),
+            );
+
+            // Gambar active filled track
+            let filled_w = bar_rect.width() * current_ratio;
+            if filled_w > 0.0 {
+                let filled_rect = Rect::from_min_max(
+                    bar_rect.min,
+                    Pos2::new(bar_rect.min.x + filled_w, bar_rect.max.y),
+                );
+                let bar_color = if is_hover {
+                    Color32::from_rgb(70, 225, 110)
+                } else {
+                    Color32::from_rgb(52, 199, 89)
+                };
+                painter.rect_filled(
+                    filled_rect,
+                    CornerRadius::same((bar_h / 2.0).round() as u8),
+                    bar_color,
+                );
+            }
+
+            // Gambar thumb / handle jika di-hover atau di-drag
+            if is_hover && track.duration_ms > 0 {
+                let thumb_x = bar_rect.min.x + filled_w;
+                painter.circle_filled(
+                    Pos2::new(thumb_x, bar_rect.center().y),
+                    5.0,
+                    Color32::WHITE,
+                );
+            }
+
+            ui.label(
+                RichText::new(format!("{:02}:{:02}", dur_sec / 60, dur_sec % 60))
+                    .font(FontId::monospace(10.0))
+                    .color(Color32::from_rgb(140, 145, 155)),
+            );
+        });
+
+        ui.add_space(8.0);
+
+        // Control Buttons: Previous, Play/Pause, Next, Lyrics Toggle
+        ui.horizontal(|ui| {
+            ui.add_space(14.0);
+
+            let btn_prev = ui.button(RichText::new("⏮").font(FontId::proportional(14.0)));
+            if btn_prev.clicked() {
+                send_media_command("prev");
+            }
+
+            let play_icon = if track.is_playing { "⏸" } else { "▶" };
+            let btn_play = ui.button(
+                RichText::new(play_icon)
+                    .font(FontId::proportional(16.0))
+                    .color(Color32::from_rgb(52, 199, 89)),
+            );
+            if btn_play.clicked() {
+                if self.demo_mode {
+                    let mut t = self.shared_media.lock().unwrap();
+                    t.is_playing = !t.is_playing;
+                } else {
+                    {
+                        let mut t = self.shared_media.lock().unwrap();
+                        t.is_playing = !t.is_playing;
+                    }
+                    send_media_command("toggle");
+                }
+            }
+
+            let btn_next = ui.button(RichText::new("⏭").font(FontId::proportional(14.0)));
+            if btn_next.clicked() {
+                if self.demo_mode {
+                    self.demo_track_idx += 1;
+                    self.apply_demo_track();
+                } else {
+                    send_media_command("next");
+                }
+            }
+
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.add_space(14.0);
+
+                // Toggle Lyrics
+                let lyrics_btn_color = if self.show_lyrics {
+                    Color32::from_rgb(100, 210, 255)
+                } else {
+                    Color32::from_rgb(150, 155, 165)
+                };
+                if ui
+                    .button(RichText::new("📝 Lirik LRCLIB").font(FontId::proportional(11.0)).color(lyrics_btn_color))
+                    .clicked()
+                {
+                    self.show_lyrics = !self.show_lyrics;
+                    self.save_config();
+                    if self.show_lyrics && lyrics.lines.is_empty() && !lyrics.is_loading {
+                        self.shared_lyrics.lock().unwrap().current_key.clear();
+                        fetch_lyrics_async(
+                            Arc::clone(&self.shared_lyrics),
+                            Arc::clone(&self.lyrics_cache),
+                            track.artist.clone(),
+                            track.title.clone(),
+                            track.duration_ms / 1000,
+                        );
+                    }
+                }
+            });
+        });
+
+        // Volume slider: system volume (default audio endpoint).
+        // Applies live per whole-percent step; external volume
+        // changes (keyboard keys, other apps) are NOT reflected
+        // until restart (v1 limitation).
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.add_space(14.0);
+            ui.label(RichText::new("🔊").font(FontId::proportional(12.0)));
+            let mut vol = (self.volume * 100.0).round();
+            ui.spacing_mut().slider_width = (ui.available_width() - 70.0).max(60.0);
+            let resp = ui.add(
+                egui::Slider::new(&mut vol, 0.0..=100.0)
+                    .show_value(false),
+            );
+            if resp.changed() {
+                self.volume = vol.round() / 100.0;
+                set_system_volume(self.volume);
+            }
+            ui.label(
+                RichText::new(format!("{}%", (self.volume * 100.0).round() as i32))
+                    .font(FontId::proportional(11.0))
+                    .color(Color32::from_rgb(150, 155, 165)),
+            );
+            ui.add_space(14.0);
+        });
+
+        // Water reminder row: glass count + drink button. When
+        // due, the row turns into a highlighted reminder.
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.add_space(14.0);
+            let due = self.water_due();
+            let (water_text, water_color) = if due {
+                (
+                    "💧 Waktunya minum!".to_string(),
+                    Color32::from_rgb(100, 210, 255),
+                )
+            } else {
+                (
+                    format!("💧 Minum: {} gelas hari ini", self.water.count_today),
+                    Color32::from_rgb(150, 155, 165),
+                )
+            };
+            ui.label(
+                RichText::new(water_text)
+                    .font(FontId::proportional(11.0))
+                    .color(water_color),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.add_space(14.0);
+                if ui.button(RichText::new("🚰 Sudah minum").font(FontId::proportional(11.0))).clicked() {
+                    self.water.count_today += 1;
+                    self.water_next_due =
+                        Instant::now() + Duration::from_secs(self.water_mins * 60);
+                    self.water.save();
+                }
+            });
+        });
+    }
+
+    /// Kolom lirik di panel expanded (side-by-side ala Nusa):
+    /// panel kanan setinggi kolom, scroll mengikuti baris aktif,
+    /// klik baris -> seek (perilaku lama dipertahankan).
+    fn render_lyrics_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        track: &MediaTrack,
+        lyrics: &LyricsState,
+    ) {
+        egui::Frame::NONE
+            .fill(Color32::from_rgb(14, 16, 20))
+            .inner_margin(egui::Margin::symmetric(14, 6))
+            .show(ui, |ui| {
+                if lyrics.is_loading {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(16.0);
+                        ui.spinner();
+                        ui.label(
+                            RichText::new("Sinkronisasi lirik dari LRCLIB...")
+                                .font(FontId::proportional(11.0))
+                                .color(Color32::from_rgb(140, 180, 220)),
+                        );
+                    });
+                } else if let Some(ref err) = lyrics.error {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!("⚠️ {}", err))
+                                .font(FontId::proportional(11.0))
+                                .color(Color32::from_rgb(240, 140, 140)),
+                        );
+                        if ui.button(RichText::new("🔄 Coba Lagi").font(FontId::proportional(10.0))).clicked() {
+                            self.shared_lyrics.lock().unwrap().current_key.clear();
+                            fetch_lyrics_async(
+                                Arc::clone(&self.shared_lyrics),
+                                Arc::clone(&self.lyrics_cache),
+                                track.artist.clone(),
+                                track.title.clone(),
+                                track.duration_ms / 1000,
+                            );
+                        }
+                    });
+                } else if lyrics.lines.is_empty() {
+                    ui.label(
+                        RichText::new("Lirik tidak tersedia untuk lagu ini.")
+                            .font(FontId::proportional(11.0))
+                            .color(Color32::GRAY),
+                    );
+                } else {
+                    // Temukan baris lirik yang sedang aktif
+                    let cur_ms = track.position_ms;
+                    let mut active_idx = 0;
+                    for (i, line) in lyrics.lines.iter().enumerate() {
+                        if line.time_ms <= cur_ms {
+                            active_idx = i;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for (i, line) in lyrics.lines.iter().enumerate() {
+                                let is_current = i == active_idx;
+                                let text_color = if is_current {
+                                    Color32::from_rgb(100, 230, 255) // Bright cyan highlight
+                                } else if i < active_idx {
+                                    Color32::from_rgb(110, 115, 125) // Past lines
+                                } else {
+                                    Color32::from_rgb(150, 155, 165) // Upcoming
+                                };
+
+                                let font = if is_current {
+                                    FontId::proportional(13.5)
+                                } else {
+                                    FontId::proportional(11.5)
+                                };
+
+                                // Klik baris lirik -> seek ke timestamp baris itu
+                                // (pola sama seperti seek bar: update posisi optimis
+                                // + seek media asli, kecuali mode Demo).
+                                let label = ui.add(
+                                    egui::Label::new(
+                                        RichText::new(&line.text)
+                                            .font(font)
+                                            .color(text_color)
+                                            .strong(),
+                                    )
+                                    .sense(Sense::click()),
+                                );
+
+                                if label.clicked() {
+                                    {
+                                        let mut t = self.shared_media.lock().unwrap();
+                                        t.position_ms = line.time_ms;
+                                    }
+                                    if !self.demo_mode {
+                                        seek_media_position(line.time_ms);
+                                    }
+                                }
+
+                                if is_current {
+                                    label.scroll_to_me(Some(Align::Center));
+                                }
+                            }
+                        });
+                }
+            });
+    }
+
     fn render_expanded_notch(
         &mut self,
         ui: &mut egui::Ui,
@@ -561,351 +921,26 @@ impl NotchApp {
 
             ui.add_space(6.0);
 
-            // Informasi Lagu: Judul & Artist
-            ui.horizontal(|ui| {
-                ui.add_space(14.0);
-                ui.vertical(|ui| {
-                    let title_text = if track.title.is_empty() {
-                        "Tidak Ada Musik Aktif"
-                    } else {
-                        &track.title
-                    };
-                    ui.label(
-                        RichText::new(title_text)
-                            .font(FontId::proportional(15.0))
-                            .color(Color32::WHITE)
-                            .strong(),
-                    );
-                    ui.label(
-                        RichText::new(&track.artist)
-                            .font(FontId::proportional(12.0))
-                            .color(Color32::from_rgb(155, 162, 175)),
-                    );
-                });
-            });
-
-            ui.add_space(6.0);
-
-            // Playback Progress Bar & Time (Interactive Seek Bar)
-            ui.horizontal(|ui| {
-                ui.add_space(14.0);
-                let pos_sec = track.position_ms / 1000;
-                let dur_sec = track.duration_ms / 1000;
-
-                ui.label(
-                    RichText::new(format!("{:02}:{:02}", pos_sec / 60, pos_sec % 60))
-                        .font(FontId::monospace(10.0))
-                        .color(Color32::from_rgb(140, 145, 155)),
-                );
-
-                let bar_width = (ui.available_width() - 55.0).max(60.0);
-                let (response, painter) = ui.allocate_painter(vec2(bar_width, 14.0), Sense::click_and_drag());
-                let rect = response.rect;
-
-                let is_hover = response.hovered() || response.dragged();
-                let bar_h = if is_hover { 6.0 } else { 4.0 };
-                let bar_rect = Rect::from_center_size(rect.center(), vec2(rect.width(), bar_h));
-
-                let mut current_ratio = if dur_sec > 0 {
-                    (track.position_ms as f32 / track.duration_ms as f32).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-
-                // Tangani interaksi klik / drag untuk seek maju mundur
-                if (response.clicked() || response.dragged()) && track.duration_ms > 0 {
-                    if let Some(pos) = response.interact_pointer_pos() {
-                        let new_ratio = ((pos.x - bar_rect.min.x) / bar_rect.width()).clamp(0.0, 1.0);
-                        let new_pos_ms = (new_ratio * track.duration_ms as f32) as u64;
-
-                        // Update state optimis instan
-                        {
-                            let mut t = self.shared_media.lock().unwrap();
-                            t.position_ms = new_pos_ms;
-                        }
-                        if !self.demo_mode {
-                            seek_media_position(new_pos_ms);
-                        }
-                        current_ratio = new_ratio;
-                    }
-                }
-
-                // Gambar background track
-                painter.rect_filled(
-                    bar_rect,
-                    CornerRadius::same((bar_h / 2.0).round() as u8),
-                    Color32::from_rgb(45, 50, 62),
-                );
-
-                // Gambar active filled track
-                let filled_w = bar_rect.width() * current_ratio;
-                if filled_w > 0.0 {
-                    let filled_rect = Rect::from_min_max(
-                        bar_rect.min,
-                        Pos2::new(bar_rect.min.x + filled_w, bar_rect.max.y),
-                    );
-                    let bar_color = if is_hover {
-                        Color32::from_rgb(70, 225, 110)
-                    } else {
-                        Color32::from_rgb(52, 199, 89)
-                    };
-                    painter.rect_filled(
-                        filled_rect,
-                        CornerRadius::same((bar_h / 2.0).round() as u8),
-                        bar_color,
-                    );
-                }
-
-                // Gambar thumb / handle jika di-hover atau di-drag
-                if is_hover && track.duration_ms > 0 {
-                    let thumb_x = bar_rect.min.x + filled_w;
-                    painter.circle_filled(
-                        Pos2::new(thumb_x, bar_rect.center().y),
-                        5.0,
-                        Color32::WHITE,
-                    );
-                }
-
-                ui.label(
-                    RichText::new(format!("{:02}:{:02}", dur_sec / 60, dur_sec % 60))
-                        .font(FontId::monospace(10.0))
-                        .color(Color32::from_rgb(140, 145, 155)),
-                );
-            });
-
-            ui.add_space(8.0);
-
-            // Control Buttons: Previous, Play/Pause, Next, Lyrics Toggle
-            ui.horizontal(|ui| {
-                ui.add_space(14.0);
-
-                let btn_prev = ui.button(RichText::new("⏮").font(FontId::proportional(14.0)));
-                if btn_prev.clicked() {
-                    send_media_command("prev");
-                }
-
-                let play_icon = if track.is_playing { "⏸" } else { "▶" };
-                let btn_play = ui.button(
-                    RichText::new(play_icon)
-                        .font(FontId::proportional(16.0))
-                        .color(Color32::from_rgb(52, 199, 89)),
-                );
-                if btn_play.clicked() {
-                    if self.demo_mode {
-                        let mut t = self.shared_media.lock().unwrap();
-                        t.is_playing = !t.is_playing;
-                    } else {
-                        {
-                            let mut t = self.shared_media.lock().unwrap();
-                            t.is_playing = !t.is_playing;
-                        }
-                        send_media_command("toggle");
-                    }
-                }
-
-                let btn_next = ui.button(RichText::new("⏭").font(FontId::proportional(14.0)));
-                if btn_next.clicked() {
-                    if self.demo_mode {
-                        self.demo_track_idx += 1;
-                        self.apply_demo_track();
-                    } else {
-                        send_media_command("next");
-                    }
-                }
-
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.add_space(14.0);
-
-                    // Toggle Lyrics
-                    let lyrics_btn_color = if self.show_lyrics {
-                        Color32::from_rgb(100, 210, 255)
-                    } else {
-                        Color32::from_rgb(150, 155, 165)
-                    };
-                    if ui
-                        .button(RichText::new("📝 Lirik LRCLIB").font(FontId::proportional(11.0)).color(lyrics_btn_color))
-                        .clicked()
-                    {
-                        self.show_lyrics = !self.show_lyrics;
-                        self.save_config();
-                        if self.show_lyrics && lyrics.lines.is_empty() && !lyrics.is_loading {
-                            self.shared_lyrics.lock().unwrap().current_key.clear();
-                            fetch_lyrics_async(
-                                Arc::clone(&self.shared_lyrics),
-                                Arc::clone(&self.lyrics_cache),
-                                track.artist.clone(),
-                                track.title.clone(),
-                                track.duration_ms / 1000,
-                            );
-                        }
-                    }
-                });
-            });
-
-            // Volume slider: system volume (default audio endpoint).
-            // Applies live per whole-percent step; external volume
-            // changes (keyboard keys, other apps) are NOT reflected
-            // until restart (v1 limitation).
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.add_space(14.0);
-                ui.label(RichText::new("🔊").font(FontId::proportional(12.0)));
-                let mut vol = (self.volume * 100.0).round();
-                ui.spacing_mut().slider_width = (ui.available_width() - 70.0).max(60.0);
-                let resp = ui.add(
-                    egui::Slider::new(&mut vol, 0.0..=100.0)
-                        .show_value(false),
-                );
-                if resp.changed() {
-                    self.volume = vol.round() / 100.0;
-                    set_system_volume(self.volume);
-                }
-                ui.label(
-                    RichText::new(format!("{}%", (self.volume * 100.0).round() as i32))
-                        .font(FontId::proportional(11.0))
-                        .color(Color32::from_rgb(150, 155, 165)),
-                );
-                ui.add_space(14.0);
-            });
-
-            // Water reminder row: glass count + drink button. When
-            // due, the row turns into a highlighted reminder.
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.add_space(14.0);
-                let due = self.water_due();
-                let (water_text, water_color) = if due {
-                    (
-                        "💧 Waktunya minum!".to_string(),
-                        Color32::from_rgb(100, 210, 255),
-                    )
-                } else {
-                    (
-                        format!("💧 Minum: {} gelas hari ini", self.water.count_today),
-                        Color32::from_rgb(150, 155, 165),
-                    )
-                };
-                ui.label(
-                    RichText::new(water_text)
-                        .font(FontId::proportional(11.0))
-                        .color(water_color),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.add_space(14.0);
-                    if ui.button(RichText::new("🚰 Sudah minum").font(FontId::proportional(11.0))).clicked() {
-                        self.water.count_today += 1;
-                        self.water_next_due =
-                            Instant::now() + Duration::from_secs(self.water_mins * 60);
-                        self.water.save();
-                    }
-                });
-            });
-
-            // 3. Panel Synced Lyrics (jika diaktifkan)
+            // Layout: side-by-side ala Nusa saat lirik aktif,
+            // kolom tunggal saat lirik mati.
             if self.show_lyrics {
-                ui.add_space(10.0);
-                ui.separator();
-
-                egui::Frame::NONE
-                    .fill(Color32::from_rgb(14, 16, 20))
-                    .inner_margin(egui::Margin::symmetric(14, 6))
-                    .show(ui, |ui| {
-                        if lyrics.is_loading {
-                            ui.vertical_centered(|ui| {
-                                ui.add_space(16.0);
-                                ui.spinner();
-                                ui.label(
-                                    RichText::new("Sinkronisasi lirik dari LRCLIB...")
-                                        .font(FontId::proportional(11.0))
-                                        .color(Color32::from_rgb(140, 180, 220)),
-                                );
-                            });
-                        } else if let Some(ref err) = lyrics.error {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new(format!("⚠️ {}", err))
-                                        .font(FontId::proportional(11.0))
-                                        .color(Color32::from_rgb(240, 140, 140)),
-                                );
-                                if ui.button(RichText::new("🔄 Coba Lagi").font(FontId::proportional(10.0))).clicked() {
-                                    self.shared_lyrics.lock().unwrap().current_key.clear();
-                                    fetch_lyrics_async(
-                                        Arc::clone(&self.shared_lyrics),
-                                        Arc::clone(&self.lyrics_cache),
-                                        track.artist.clone(),
-                                        track.title.clone(),
-                                        track.duration_ms / 1000,
-                                    );
-                                }
-                            });
-                        } else if lyrics.lines.is_empty() {
-                            ui.label(
-                                RichText::new("Lirik tidak tersedia untuk lagu ini.")
-                                    .font(FontId::proportional(11.0))
-                                    .color(Color32::GRAY),
-                            );
-                        } else {
-                            // Temukan baris lirik yang sedang aktif
-                            let cur_ms = track.position_ms;
-                            let mut active_idx = 0;
-                            for (i, line) in lyrics.lines.iter().enumerate() {
-                                if line.time_ms <= cur_ms {
-                                    active_idx = i;
-                                } else {
-                                    break;
-                                }
-                            }
-
-                            ScrollArea::vertical()
-                                .max_height(90.0)
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    for (i, line) in lyrics.lines.iter().enumerate() {
-                                        let is_current = i == active_idx;
-                                        let text_color = if is_current {
-                                            Color32::from_rgb(100, 230, 255) // Bright cyan highlight
-                                        } else if i < active_idx {
-                                            Color32::from_rgb(110, 115, 125) // Past lines
-                                        } else {
-                                            Color32::from_rgb(150, 155, 165) // Upcoming
-                                        };
-
-                                        let font = if is_current {
-                                            FontId::proportional(13.5)
-                                        } else {
-                                            FontId::proportional(11.5)
-                                        };
-
-                                        // Klik baris lirik -> seek ke timestamp baris itu
-                                        // (pola sama seperti seek bar: update posisi optimis
-                                        // + seek media asli, kecuali mode Demo).
-                                        let label = ui.add(
-                                            egui::Label::new(
-                                                RichText::new(&line.text)
-                                                    .font(font)
-                                                    .color(text_color)
-                                                    .strong(),
-                                            )
-                                            .sense(Sense::click()),
-                                        );
-
-                                        if label.clicked() {
-                                            {
-                                                let mut t = self.shared_media.lock().unwrap();
-                                                t.position_ms = line.time_ms;
-                                            }
-                                            if !self.demo_mode {
-                                                seek_media_position(line.time_ms);
-                                            }
-                                        }
-
-                                        if is_current {
-                                            label.scroll_to_me(Some(Align::Center));
-                                        }
-                                    }
-                                });
-                        }
+                ui.horizontal_top(|ui| {
+                    ui.allocate_ui_with_layout(
+                        vec2(300.0, ui.available_height()),
+                        Layout::top_down(Align::LEFT),
+                        |ui| {
+                            self.render_music_column(ui, track, lyrics);
+                        },
+                    );
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+                    ui.vertical(|ui| {
+                        self.render_lyrics_panel(ui, track, lyrics);
                     });
+                });
+            } else {
+                self.render_music_column(ui, track, lyrics);
             }
         });
     }
