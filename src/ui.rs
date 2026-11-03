@@ -230,20 +230,16 @@ impl eframe::App for NotchApp {
             // content would clip at the 165 px short height. (Only
             // while expanded: collapsing keeps the normal bar width.)
             || (self.view != PanelView::Music && self.is_expanded);
-        // Thin line: window foreground maximized -> garis tipis, kecuali
-        // sedang mengembang (hover) agar tetap bisa diinteraksi.
-        let maximized_fg = self
-            .shared_interact
-            .lock()
-            .map(|s| s.maximized_fg)
-            .unwrap_or(false);
-        let thin_line = maximized_fg && !self.is_expanded;
+        // Nusa parity: no thin line. The notch (bar, or expanded panel)
+        // stays visible over maximized windows instead of collapsing
+        // to an 8 px line, so lyrics/shelf stay reachable. The
+        // geometry thin-line path is kept but never triggered.
         let (x, y, target_w, target_h) = self.geometry.calculate_window_rect(
             self.mode,
             self.is_expanded,
             has_active_lyrics,
             ppp,
-            thin_line,
+            false,
         );
 
         if (target_w - self.last_applied_size.0).abs() > 0.5
@@ -299,16 +295,6 @@ impl eframe::App for NotchApp {
                             }
                         }
                     }
-                }
-
-                // Thin line (maximized): garis hitam tipis tanpa konten,
-                // tapi tetap bisa di-hover untuk mengembang.
-                if thin_line {
-                    egui::Frame::NONE
-                        .fill(Color32::from_rgb(10, 12, 16))
-                        .corner_radius(CornerRadius::same(4))
-                        .show(ui, |_ui| {});
-                    return;
                 }
 
                 // Radius kontainer notch
@@ -588,7 +574,12 @@ impl NotchApp {
 
             let btn_prev = ui.button(RichText::new("⏮").font(FontId::proportional(14.0)));
             if btn_prev.clicked() {
-                send_media_command("prev");
+                if self.demo_mode {
+                    self.demo_track_idx = self.demo_track_idx.saturating_sub(1);
+                    self.apply_demo_track();
+                } else {
+                    send_media_command("prev");
+                }
             }
 
             let play_icon = if track.is_playing { "⏸" } else { "▶" };
@@ -1027,7 +1018,7 @@ impl NotchApp {
                 ui.add_space(14.0);
                 ui.label(
                     RichText::new(format!(
-                        "Sesi selesai hari ini: {}  •  Fokus {} mnt / Istirahat {} mnt (atur via config.json)",
+                        "Sesi selesai hari ini: {}  •  Fokus {} mnt / Istirahat {} mnt",
                         self.todo.sessions_today, self.focus_mins, self.break_mins
                     ))
                     .font(FontId::proportional(11.0))
