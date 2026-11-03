@@ -6,15 +6,19 @@ use egui::{
     Sense, Stroke,
 };
 
+use crate::autostart::{disable_autostart, enable_autostart, is_autostart_enabled};
 use crate::config::AppConfig;
 use crate::interact::{NotchRect, SharedInteract};
 use crate::lyrics::{fetch_lyrics_async, LyricLine, LyricsState, SharedLyrics};
 use crate::media::{seek_media_position, send_media_command, MediaTrack, SharedMedia};
 use crate::shelf::{open_file, ShelfState};
 use crate::todo::{PomodoroPhase, PomodoroTimer, TodoState};
+use crate::tray::{build_tray, TrayHandles};
 use crate::volume::{get_system_volume, set_system_volume};
 use crate::water::WaterState;
 use crate::window::{DisplayMode, ScreenGeometry};
+
+use tray_icon::menu::MenuEvent;
 
 /// Which content the expanded panel shows. Music is the default;
 /// Todo and Shelf are alternate views (music keeps playing).
@@ -52,6 +56,7 @@ pub struct NotchApp {
     pub water_mins: u64,
     pub shelf: ShelfState,
     pub volume: f32,
+    pub tray: Option<TrayHandles>,
 }
 
 impl NotchApp {
@@ -92,6 +97,8 @@ impl NotchApp {
             water_mins: config.water_mins,
             shelf: shelf_state,
             volume: get_system_volume().unwrap_or(0.5),
+            // Best-effort: a failed tray build just means no tray icon.
+            tray: build_tray(is_autostart_enabled()),
         }
     }
 
@@ -191,6 +198,27 @@ impl eframe::App for NotchApp {
             }
             if changed {
                 self.shelf.save();
+            }
+        }
+
+        // Tray menu events (Show / autostart toggle / Quit). Drained
+        // every frame so rapid clicks are all handled.
+        while let Ok(event) = MenuEvent::receiver().try_recv() {
+            if let Some(tray) = &self.tray {
+                if event.id == tray.quit_id {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                } else if event.id == tray.show_id {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                } else if event.id == tray.autostart_id {
+                    let enabled = !is_autostart_enabled();
+                    if enabled {
+                        enable_autostart();
+                    } else {
+                        disable_autostart();
+                    }
+                    tray.autostart_item.set_checked(enabled);
+                }
             }
         }
 

@@ -1,11 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod autostart;
 mod config;
 mod interact;
 mod lyrics;
 mod media;
 mod shelf;
 mod todo;
+mod tray;
 mod ui;
 mod volume;
 mod water;
