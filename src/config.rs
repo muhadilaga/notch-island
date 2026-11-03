@@ -19,6 +19,21 @@ use crate::window::DisplayMode;
 pub struct AppConfig {
     pub mode: DisplayMode,
     pub show_lyrics: bool,
+    // New fields carry serde defaults so a config.json written before
+    // they existed still parses (otherwise the whole file would fall
+    // back to defaults and lose mode/show_lyrics).
+    #[serde(default = "default_focus_mins")]
+    pub focus_mins: u64,
+    #[serde(default = "default_break_mins")]
+    pub break_mins: u64,
+}
+
+fn default_focus_mins() -> u64 {
+    25
+}
+
+fn default_break_mins() -> u64 {
+    5
 }
 
 impl Default for AppConfig {
@@ -26,6 +41,8 @@ impl Default for AppConfig {
         Self {
             mode: DisplayMode::MinimalBezel,
             show_lyrics: false,
+            focus_mins: default_focus_mins(),
+            break_mins: default_break_mins(),
         }
     }
 }

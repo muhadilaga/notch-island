@@ -4,6 +4,7 @@ mod config;
 mod interact;
 mod lyrics;
 mod media;
+mod todo;
 mod ui;
 mod window;
 
@@ -13,6 +14,7 @@ use eframe::egui;
 
 use config::AppConfig;
 use interact::{spawn_interact_threads, InteractState, SharedInteract};
+use todo::TodoState;
 
 use lyrics::LyricsState;
 use media::{start_media_poller, MediaTrack};
@@ -42,9 +44,14 @@ fn main() -> eframe::Result<()> {
     let shared_lyrics = Arc::new(Mutex::new(LyricsState::default()));
     let lyrics_cache = Arc::new(Mutex::new(HashMap::new()));
 
-    // Load persisted preferences (mode, lyrics toggle); defaults
-    // when the config file is missing or unreadable.
+    // Load persisted preferences (mode, lyrics toggle, pomodoro
+    // durations); defaults when the config file is missing or
+    // unreadable.
     let config = AppConfig::load();
+
+    // Load persisted todos (own file); empty list when missing or
+    // unreadable.
+    let todo_state = TodoState::load();
 
     // Start Win32 interact threads (click-through mouse hook +
     // fullscreen watcher) alongside the media poller below.
@@ -64,6 +71,7 @@ fn main() -> eframe::Result<()> {
                 lyrics_cache,
                 config,
                 shared_interact,
+                todo_state,
             )))
         }),
     )

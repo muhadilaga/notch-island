@@ -10,6 +10,7 @@ use crate::config::AppConfig;
 use crate::interact::{NotchRect, SharedInteract};
 use crate::lyrics::{fetch_lyrics_async, LyricLine, LyricsState, SharedLyrics};
 use crate::media::{seek_media_position, send_media_command, MediaTrack, SharedMedia};
+use crate::todo::{PomodoroPhase, PomodoroTimer, TodoState};
 use crate::window::{DisplayMode, ScreenGeometry};
 
 pub struct NotchApp {
@@ -28,6 +29,12 @@ pub struct NotchApp {
     pub hover_exit_instant: Option<Instant>,
     pub last_applied_size: (f32, f32),
     pub last_applied_pos: (f32, f32),
+    pub show_todo: bool,
+    pub todo: TodoState,
+    pub todo_input: String,
+    pub pomodoro: PomodoroTimer,
+    pub focus_mins: u64,
+    pub break_mins: u64,
 }
 
 impl NotchApp {
@@ -37,6 +44,7 @@ impl NotchApp {
         lyrics_cache: Arc<Mutex<HashMap<String, Vec<LyricLine>>>>,
         config: AppConfig,
         shared_interact: SharedInteract,
+        todo_state: TodoState,
     ) -> Self {
         Self {
             shared_media,
@@ -54,6 +62,12 @@ impl NotchApp {
             hover_exit_instant: None,
             last_applied_size: (-1.0, -1.0),
             last_applied_pos: (-999.0, -999.0),
+            show_todo: false,
+            todo: todo_state,
+            todo_input: String::new(),
+            pomodoro: PomodoroTimer::new(config.focus_mins),
+            focus_mins: config.focus_mins,
+            break_mins: config.break_mins,
         }
     }
 
@@ -63,6 +77,8 @@ impl NotchApp {
         AppConfig {
             mode: self.mode,
             show_lyrics: self.show_lyrics,
+            focus_mins: self.focus_mins,
+            break_mins: self.break_mins,
         }
         .save();
     }
@@ -120,6 +136,15 @@ impl eframe::App for NotchApp {
         // Update animasi
         if current_track.is_playing {
             self.visualizer_phase = (self.visualizer_phase + 0.15) % (std::f32::consts::PI * 2.0);
+        }
+
+        // Pomodoro countdown: advances on the 30 ms repaint above.
+        // A finished Focus phase counts as one session today.
+        if let Some(finished) = self.pomodoro.tick(self.focus_mins, self.break_mins) {
+            if finished == PomodoroPhase::Focus {
+                self.todo.sessions_today += 1;
+                self.todo.save();
+            }
         }
 
         // Dinamis sesuaikan ukuran viewport window hanya ketika berubah
@@ -241,6 +266,8 @@ impl eframe::App for NotchApp {
                     .show(ui, |ui| {
                         if !self.is_expanded {
                             self.render_collapsed_notch(ui, &current_track, &lyrics_state);
+                        } else if self.show_todo {
+                            self.render_todo_view(ui);
                         } else {
                             self.render_expanded_notch(ui, &current_track, &lyrics_state);
                         }
@@ -420,6 +447,15 @@ impl NotchApp {
                         self.demo_mode = true;
                         self.demo_track_idx += 1;
                         self.apply_demo_track();
+                    }
+
+                    // Todo + Pomodoro view (expanded panel only;
+                    // music keeps playing in the background)
+                    if ui
+                        .button(RichText::new("✅ Todo").font(FontId::proportional(11.0)).color(Color32::from_rgb(140, 220, 160)))
+                        .clicked()
+                    {
+                        self.show_todo = true;
                     }
                 });
             });
@@ -697,6 +733,163 @@ impl NotchApp {
                         }
                     });
             }
+        });
+    }
+
+    /// Todo list + Pomodoro view, replacing the music content of the
+    /// expanded panel while music keeps playing in the background.
+    /// v1 scope: visual timer only, no sound; timer state is not
+    /// persisted across restarts (only the list + session count are).
+    fn render_todo_view(&mut self, ui: &mut egui::Ui) {
+        ui.vertical(|ui| {
+            ui.add_space(8.0);
+
+            // Header: title + back to music + collapse
+            ui.horizontal(|ui| {
+                ui.add_space(12.0);
+                ui.label(
+                    RichText::new("✅ Todo & Pomodoro")
+                        .font(FontId::proportional(13.0))
+                        .color(Color32::WHITE)
+                        .strong(),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.add_space(4.0);
+                    if ui
+                        .button(RichText::new("▲ Tutup").font(FontId::proportional(11.0)).color(Color32::from_rgb(180, 185, 195)))
+                        .clicked()
+                    {
+                        self.is_expanded = false;
+                        self.hover_exit_instant = None;
+                    }
+                    if ui
+                        .button(RichText::new("🎵 Musik").font(FontId::proportional(11.0)).color(Color32::from_rgb(100, 210, 255)))
+                        .clicked()
+                    {
+                        self.show_todo = false;
+                    }
+                });
+            });
+
+            ui.add_space(8.0);
+
+            // Pomodoro block: phase + countdown + controls
+            let (phase_text, phase_color) = match self.pomodoro.phase {
+                PomodoroPhase::Focus => ("🎯 Fokus", Color32::from_rgb(52, 199, 89)),
+                PomodoroPhase::Break => ("☕ Istirahat", Color32::from_rgb(100, 210, 255)),
+            };
+            ui.horizontal(|ui| {
+                ui.add_space(14.0);
+                ui.label(
+                    RichText::new(phase_text)
+                        .font(FontId::proportional(13.0))
+                        .color(phase_color)
+                        .strong(),
+                );
+                let secs = self.pomodoro.remaining_secs();
+                ui.label(
+                    RichText::new(format!("{:02}:{:02}", secs / 60, secs % 60))
+                        .font(FontId::monospace(20.0))
+                        .color(Color32::WHITE)
+                        .strong(),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.add_space(14.0);
+                    if ui.button(RichText::new("↺ Reset").font(FontId::proportional(11.0))).clicked() {
+                        self.pomodoro.reset(self.focus_mins, self.break_mins);
+                    }
+                    let start_label = if self.pomodoro.running { "⏸ Jeda" } else { "▶ Mulai" };
+                    if ui.button(RichText::new(start_label).font(FontId::proportional(11.0))).clicked() {
+                        if self.pomodoro.running {
+                            self.pomodoro.pause();
+                        } else {
+                            self.pomodoro.start();
+                        }
+                    }
+                });
+            });
+            ui.horizontal(|ui| {
+                ui.add_space(14.0);
+                ui.label(
+                    RichText::new(format!(
+                        "Sesi selesai hari ini: {}  •  Fokus {} mnt / Istirahat {} mnt (atur via config.json)",
+                        self.todo.sessions_today, self.focus_mins, self.break_mins
+                    ))
+                    .font(FontId::proportional(11.0))
+                    .color(Color32::from_rgb(150, 155, 165)),
+                );
+            });
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            // Add todo input (Enter works like the Tambah button)
+            ui.horizontal(|ui| {
+                ui.add_space(14.0);
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut self.todo_input)
+                        .hint_text("Tulis tugas baru...")
+                        .desired_width((ui.available_width() - 90.0).max(60.0)),
+                );
+                let enter_pressed =
+                    resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (ui.button(RichText::new("＋ Tambah").font(FontId::proportional(11.0))).clicked()
+                    || enter_pressed)
+                    && !self.todo_input.trim().is_empty()
+                {
+                    self.todo.items.push(crate::todo::TodoItem {
+                        text: self.todo_input.trim().to_string(),
+                        done: false,
+                    });
+                    self.todo_input.clear();
+                    self.todo.save();
+                }
+                ui.add_space(14.0);
+            });
+
+            ui.add_space(6.0);
+
+            // Todo list, scrollable so it fits the expanded panel
+            ScrollArea::vertical()
+                .max_height(120.0)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let mut changed = false;
+                    let mut remove_idx: Option<usize> = None;
+                    for (i, item) in self.todo.items.iter_mut().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.add_space(14.0);
+                            if ui.checkbox(&mut item.done, "").changed() {
+                                changed = true;
+                            }
+                            let text = if item.done {
+                                RichText::new(&item.text)
+                                    .font(FontId::proportional(12.0))
+                                    .color(Color32::from_rgb(110, 115, 125))
+                                    .strikethrough()
+                            } else {
+                                RichText::new(&item.text)
+                                    .font(FontId::proportional(12.0))
+                                    .color(Color32::from_rgb(225, 230, 240))
+                            };
+                            ui.label(text);
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.add_space(14.0);
+                                if ui.button(RichText::new("✕").font(FontId::proportional(11.0))).clicked() {
+                                    remove_idx = Some(i);
+                                }
+                            });
+                        });
+                    }
+                    if let Some(i) = remove_idx {
+                        self.todo.items.remove(i);
+                        changed = true;
+                    }
+                    if changed {
+                        self.todo.save();
+                    }
+                });
         });
     }
 }
