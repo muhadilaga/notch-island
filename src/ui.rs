@@ -835,6 +835,27 @@ impl NotchApp {
             });
     }
 
+    /// Tanggal/jam lokal ala Nusa ("Tue 3 Nov 2026 19:36") via
+    /// Win32 GetLocalTime (tanpa dep baru; wDayOfWeek langsung ada).
+    /// Dipakai status row header di expanded penuh (lirik).
+    fn now_header_text() -> String {
+        use windows::Win32::System::SystemInformation::GetLocalTime;
+        let st = unsafe { GetLocalTime() };
+        const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        const MONTHS: [&str; 12] = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+        let day = DAYS.get(st.wDayOfWeek as usize).copied().unwrap_or("");
+        let month = MONTHS
+            .get(st.wMonth.saturating_sub(1) as usize)
+            .copied()
+            .unwrap_or("");
+        format!(
+            "{} {} {} {} {:02}:{:02}",
+            day, st.wDay, month, st.wYear, st.wHour, st.wMinute
+        )
+    }
+
     fn render_expanded_notch(
         &mut self,
         ui: &mut egui::Ui,
@@ -843,6 +864,33 @@ impl NotchApp {
     ) {
         ui.vertical(|ui| {
             ui.add_space(8.0);
+
+            // Status row ala Nusa (hanya di expanded penuh/lirik):
+            // dot status + tanggal/jam sistem, di tengah baris.
+            // Di panel pendek (165 px, lirik mati) tidak ditampilkan
+            // agar konten musik tidak terpotong.
+            if self.show_lyrics {
+                ui.vertical_centered(|ui| {
+                    ui.horizontal(|ui| {
+                        let dot_color = if track.is_playing {
+                            Color32::from_rgb(52, 199, 89)
+                        } else {
+                            Color32::from_rgb(115, 120, 130)
+                        };
+                        ui.label(
+                            RichText::new("●")
+                                .font(FontId::proportional(10.0))
+                                .color(dot_color),
+                        );
+                        ui.label(
+                            RichText::new(Self::now_header_text())
+                                .font(FontId::proportional(11.0))
+                                .color(Color32::from_rgb(190, 195, 205)),
+                        );
+                    });
+                });
+                ui.add_space(2.0);
+            }
 
             // Header Bar: Source App + Mode Switcher + Close
             ui.horizontal(|ui| {
