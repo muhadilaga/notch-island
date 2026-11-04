@@ -17,7 +17,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IsZoomed, MSG, MSLLHOOKSTRUCT, SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, SM_CXSCREEN,
     SM_CYSCREEN, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SWP_NOZORDER, SWP_SHOWWINDOW, TranslateMessage, WH_MOUSE_LL, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WS_CAPTION, WS_EX_LAYERED, WS_EX_TRANSPARENT,
+    WINDOW_STYLE, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
+    WS_EX_TRANSPARENT,
 };
 
 /// Rect notch dalam piksel fisik layar, dipublish tiap frame oleh UI.
@@ -79,6 +80,7 @@ pub fn spawn_interact_threads(state: SharedInteract) {
         if let Ok(mut slot) = hook_globals.hwnd.lock() {
             *slot = Some(hwnd_raw);
         }
+        set_click_through(HWND(hwnd_raw as *mut c_void), true);
         unsafe {
             match SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook_proc), HINSTANCE::default(), 0)
             {
@@ -208,7 +210,7 @@ unsafe extern "system" fn mouse_hook_proc(
 fn set_click_through(hwnd: HWND, enable: bool) {
     unsafe {
         let cur = WINDOW_EX_STYLE(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32);
-        let mut next = cur | WS_EX_LAYERED;
+        let mut next = (cur | WS_EX_LAYERED | WS_EX_TOOLWINDOW) & !WS_EX_APPWINDOW;
         if enable {
             next = next | WS_EX_TRANSPARENT;
         } else {

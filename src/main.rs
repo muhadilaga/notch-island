@@ -42,6 +42,7 @@ fn main() -> eframe::Result<()> {
             .with_transparent(true)
             .with_always_on_top()
             .with_resizable(false)
+            .with_taskbar(false)
             .with_inner_size(egui::vec2(initial_width, initial_height))
             .with_position(egui::pos2(initial_x, initial_y)),
         ..Default::default()
