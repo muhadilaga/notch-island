@@ -359,7 +359,11 @@ impl eframe::App for NotchApp {
                 // Radius kontainer notch: satu gaya rounded penuh
                 // ala Nusa untuk semua mode (sebelumnya mode Bar
                 // memakai sudut atas siku, bikin tampilan tak konsisten).
-                let radius = CornerRadius::same(18);
+                let radius = if !self.is_expanded && !current_track.is_playing {
+                    CornerRadius { nw: 0, ne: 0, sw: 4, se: 4 }
+                } else {
+                    CornerRadius::same(18)
+                };
 
                 let bg_color = Color32::from_rgb(10, 12, 16);
                 let border_color = if self.is_expanded {
@@ -368,17 +372,23 @@ impl eframe::App for NotchApp {
                     Color32::from_rgb(30, 34, 44)
                 };
 
+                let margin = if !self.is_expanded && !current_track.is_playing {
+                    egui::Margin::ZERO
+                } else {
+                    egui::Margin {
+                        left: 10,
+                        right: 10,
+                        top: if !self.is_expanded { 0 } else { 4 },
+                        bottom: 4,
+                    }
+                };
+
                 // Kontainer Notch dengan Margin rapi di dalam kanvas
                 egui::Frame::NONE
                     .fill(bg_color)
                     .corner_radius(radius)
                     .stroke(Stroke::new(1.0_f32, border_color))
-                    .inner_margin(egui::Margin {
-                        left: 10,
-                        right: 10,
-                        top: if !self.is_expanded { 0 } else { 4 },
-                        bottom: 4,
-                    })
+                    .inner_margin(margin)
                     .show(ui, |ui| {
                         if !self.is_expanded {
                             self.render_collapsed_notch(ui, &current_track, &lyrics_state);
@@ -403,10 +413,10 @@ impl NotchApp {
         track: &MediaTrack,
         _lyrics: &LyricsState,
     ) {
-        // Tidak ada teks/dot/jam di sini — Frame container sudah
-        // mengecat strip 48x8; fungsi ini langsung kembali.
-        // Hover di atas slit tetap mengembang seperti biasa.
+        // Strip 48x8 slit kamera ala Nusa saat idle/pause.
+        // Alokasi ruang agar Frame mengecat kontainer di kanvas.
         if !track.is_playing {
+            ui.allocate_space(ui.available_size());
             return;
         }
 
