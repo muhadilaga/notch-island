@@ -52,24 +52,26 @@ impl ScreenGeometry {
         let width = if is_expanded {
             if has_lyrics { 580.0 } else { 460.0 }
         } else if !is_playing {
-            // Mini pill idle ala Nusa: dot + jam saja (bukan bar
-            // 280/300 px berisi "Notch Island • Standby").
-            140.0
-        } else if has_lyrics {
-            380.0
+            // Slit kamera ala Nusa saat idle/pause: strip 48 px
+            // (bukan pill 140 px berisi dot + jam). Hover di atas
+            // slit tetap mengembang; target hover jadi sekecil
+            // slit (trade-off Nusa, bukan bug).
+            48.0
         } else {
-            match mode {
-                DisplayMode::FloatingIsland => 280.0,
-                DisplayMode::MinimalBezel => 300.0,
-            }
+            // Pill play minimal ala Nusa: satu lebar 140 px untuk
+            // semua mode (dulu 280/300/380 px berisi ticker).
+            140.0
         };
 
         let height = if is_expanded {
             // Panel pendek 165 -> 195: ruang baris jam terpusat +
             // header carousel di semua view (bukan cuma lirik).
             if has_lyrics { 300.0 } else { 195.0 }
-        } else {
+        } else if is_playing {
             36.0
+        } else {
+            // Slit idle/pause: tinggi 8 px ala Nusa.
+            8.0
         };
 
         let x = (logical_screen_w - width) / 2.0;

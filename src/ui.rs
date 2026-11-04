@@ -345,7 +345,9 @@ impl eframe::App for NotchApp {
                         match self.hover_exit_instant {
                             None => self.hover_exit_instant = Some(Instant::now()),
                             Some(exit_time) => {
-                                if exit_time.elapsed().as_millis() > 350 {
+                                // Debounce collapse ala Nusa: 150 ms
+                                // (dulu 350 ms) sebelum menciut.
+                                if exit_time.elapsed().as_millis() > 150 {
                                     self.is_expanded = false;
                                     self.hover_exit_instant = None;
                                 }
@@ -399,90 +401,38 @@ impl NotchApp {
         &self,
         ui: &mut egui::Ui,
         track: &MediaTrack,
-        lyrics: &LyricsState,
+        _lyrics: &LyricsState,
     ) {
-        // Mini pill ala Nusa saat idle (tidak playing): hanya dot +
-        // jam HH:MM, bukan bar "Notch Island • Standby". Hover di
-        // atas pill tetap mengembang seperti biasa.
+        // Tidak ada teks/dot/jam di sini — Frame container sudah
+        // mengecat strip 48x8; fungsi ini langsung kembali.
+        // Hover di atas slit tetap mengembang seperti biasa.
         if !track.is_playing {
-            ui.centered_and_justified(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("●")
-                            .font(FontId::proportional(11.0))
-                            .color(Color32::from_rgb(52, 199, 89)),
-                    );
-                    ui.label(
-                        RichText::new(Self::now_clock_hhmm())
-                            .font(FontId::proportional(12.0))
-                            .color(Color32::WHITE)
-                            .strong(),
-                    );
-                });
-            });
             return;
         }
 
+        // Pill play minimal ala Nusa: dot + jam + mini EQ, TANPA
+        // ticker judul/lirik (dihapus sesuai perilaku Nusa; judul
+        // dan lirik tetap tampil di panel expanded).
         ui.horizontal_centered(|ui| {
-            // Icon sumber media di sisi kiri
-            let icon_str = match track.source_app.as_str() {
-                "Spotify" => "🟢",
-                "Google Chrome" | "Microsoft Edge" => "🌐",
-                _ => "🎵",
-            };
-            ui.label(RichText::new(icon_str).font(FontId::proportional(12.0)));
-
-            ui.add_space(4.0);
-
-            // Teks tengah: Lirik aktif atau Info Lagu
-            let active_lyric = if track.is_playing && !lyrics.lines.is_empty() {
-                let cur_ms = track.position_ms;
-                lyrics.lines.iter().rev().find(|l| l.time_ms <= cur_ms)
-            } else {
-                None
-            };
-
-            let (display_text, is_lyric) = if let Some(l) = active_lyric {
-                if !l.text.trim().is_empty() {
-                    (l.text.clone(), true)
-                } else if track.is_playing {
-                    (format!("{} • {}", track.title, track.artist), false)
-                } else {
-                    ("Notch Island • Standby".to_string(), false)
-                }
-            } else if track.is_playing && !track.title.is_empty() {
-                (format!("{} • {}", track.title, track.artist), false)
-            } else {
-                ("Notch Island • Standby".to_string(), false)
-            };
-
-            // Water reminder: prefix droplet when a glass is due.
-            let display_text = if self.water_due() {
-                format!("💧 {}", display_text)
-            } else {
-                display_text
-            };
-
-            // Hitung lebar teks yang tersedia agar pas di dalam bar tanpa terpotong kaku
-            let text_avail_w = (ui.available_width() - 36.0).max(60.0);
-            let text_color = if is_lyric {
-                Color32::from_rgb(110, 220, 255)
-            } else {
-                Color32::from_rgb(225, 230, 240)
-            };
-
-            ui.add_sized(
-                vec2(text_avail_w, 22.0),
-                egui::Label::new(
-                    RichText::new(display_text)
-                        .font(FontId::proportional(12.0))
-                        .color(text_color)
-                        .strong(),
-                )
-                .truncate(),
+            if self.water_due() {
+                ui.label(RichText::new("💧").font(FontId::proportional(12.0)));
+                ui.add_space(2.0);
+            }
+            ui.label(
+                RichText::new("●")
+                    .font(FontId::proportional(11.0))
+                    .color(Color32::from_rgb(52, 199, 89)),
             );
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(Self::now_clock_hhmm())
+                    .font(FontId::proportional(12.0))
+                    .color(Color32::WHITE)
+                    .strong(),
+            );
+            ui.add_space(6.0);
 
-            // Visualizer wave di sisi kanan
+            // Mini EQ (kode visualizer lama, dipakai ulang).
             let (response, painter) = ui.allocate_painter(vec2(22.0, 16.0), Sense::hover());
             let bar_count = 4;
             let bar_w = 2.5;
