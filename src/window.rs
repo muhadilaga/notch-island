@@ -1,16 +1,11 @@
 use serde::{Deserialize, Serialize};
 use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DisplayMode {
     FloatingIsland,
+    #[default]
     MinimalBezel,
-}
-
-impl Default for DisplayMode {
-    fn default() -> Self {
-        Self::MinimalBezel
-    }
 }
 
 pub struct ScreenGeometry {

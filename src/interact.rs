@@ -212,9 +212,9 @@ fn set_click_through(hwnd: HWND, enable: bool) {
         let cur = WINDOW_EX_STYLE(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32);
         let mut next = (cur | WS_EX_LAYERED | WS_EX_TOOLWINDOW) & !WS_EX_APPWINDOW;
         if enable {
-            next = next | WS_EX_TRANSPARENT;
+            next |= WS_EX_TRANSPARENT;
         } else {
-            next = next & !WS_EX_TRANSPARENT;
+            next &= !WS_EX_TRANSPARENT;
         }
         if next != cur {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next.0 as isize);
@@ -233,6 +233,9 @@ fn set_click_through(hwnd: HWND, enable: bool) {
 
 fn resolve_notch_hwnd() -> Option<usize> {
     unsafe {
+        if let Ok(hwnd) = FindWindowW(w!("Window Class"), w!("Notch Island")) {
+            return Some(hwnd.0 as usize);
+        }
         // FindWindowW di windows 0.58 mengembalikan Result: Err = tidak ketemu.
         match FindWindowW(PCWSTR::null(), w!("Notch Island")) {
             Ok(hwnd) => Some(hwnd.0 as usize),
@@ -279,5 +282,16 @@ fn is_fullscreen_active(own: HWND) -> bool {
         }
         let style = WINDOW_STYLE(GetWindowLongPtrW(fg, GWL_STYLE) as u32);
         (style & WS_CAPTION).0 == 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_notch_hwnd() {
+        let hwnd = resolve_notch_hwnd();
+        println!("Resolved HWND: {:?}", hwnd);
     }
 }

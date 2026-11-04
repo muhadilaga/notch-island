@@ -4,20 +4,38 @@ Aplikasi desktop Dynamic Notch native Windows 10/11 berbasis **Pure Rust** dan *
 
 ---
 
-## 🎯 Spesifikasi & Keunggulan
-- **Ukuran Binary Ringan**: ~6.5 MB (standalone executable, tanpa WebView2, Chromium, Electron, atau Tauri runtime).
+## ⚡ Fitur Utama & Keunggulan
+
+- **Ukuran Binary Ringan**: ~6.7 MB (standalone executable native MSVC, tanpa WebView2, Chromium, Electron, atau Tauri runtime).
 - **Efisiensi Memori (RAM)**: ~25 - 35 MB saat berjalan aktif.
 - **CPU Idle**: ~0.0% - 0.1% (hardware accelerated GPU rendering).
-- **Direct WinRT API & Hardware Fallback**:
-  - Membaca metadata dan timeline lagu langsung via Windows Runtime GSMTC Session Manager (`windows` crate), kompatibel dengan Spotify, Apple Music, Tidal, YouTube, Chrome, Edge, Firefox, dan VLC.
-  - Dilengkapi Win32 hardware virtual key fallback (`keybd_event` untuk `VK_MEDIA_PLAY_PAUSE`, `VK_MEDIA_NEXT_TRACK`, `VK_MEDIA_PREV_TRACK`) saat SMTC async command diabaikan oleh pemutar target.
-- **Interactive Seek Bar**: Scroll bar progres hijau interaktif dengan dukungan klik langsung maupun drag/scrub maju-mundur secara mulus via WinRT `TryChangePlaybackPositionAsync`.
-- **LRCLIB Synced Lyrics Engine**:
-  - Otomatis mencari dan menyinkronkan lirik baris-per-baris dengan lagu yang sedang diputar.
-  - Multi-tier fallback pencarian (`/api/get` exact match $\to$ sanitasi judul $\to$ `/api/search` query) dengan custom User-Agent upstream.
-- **Dual Display Mode**:
-  - `━ Minimal Bar`: Menempel persis di tepi paling atas monitor (`y = 0.0`) dengan sudut atas rata (`radius 0`) dan sudut bawah melengkung halus, tanpa gap bezel. Menampilkan teks lirik lagu aktif secara horizontal.
-  - `🏝 Floating Island`: Kapsul dinamis membulat (*pill shape*) di bagian atas tengah layar.
+- **Nusa Parity & Perilaku Notch Adaptif**:
+  - **Idle Camera Slit**: Berukuran ultra-ringkas (48x8 px) di bibir atas layar saat tidak ada media yang diputar, tembus klik (*click-through*) 100% ke aplikasi di bawahnya.
+  - **Playing Minimal Pill**: Saat media berputar, notch berubah menjadi kapsul mini elegan (140x36 px) dengan indikator aktif, jam lokal, dan equalizer mini.
+  - **Smooth Hover Expand**: Kursor mouse mendekati slit/pill otomatis memperluas notch menjadi kartu interaktif (460x195 px) dan menghapus sifat tembus klik.
+  - **150ms Unhover Debounce**: Notch tidak langsung menutup seketika saat kursor bergeser sedikit, memberikan pengalaman navigasi yang halus.
+  - **Pinning Lirik Interaktif**: Klik tombol **Lirik LRCLIB** mengunci notch tetap terbuka menampilkan panel lirik (580x300 px) meskipun kursor mouse berpindah ke luar notch. Saat tombol lirik dimatikan atau tombol **Ciutkan** ditekan, notch kembali ke mode auto-collapse saat kursor pergi.
+- **Interactive Seek Bar & Clickable Lyrics Seek**:
+  - Scrub bar progres interaktif dengan drag/klik maju-mundur via WinRT `TryChangePlaybackPositionAsync`.
+  - Klik langsung baris teks lirik manapun untuk melompat (*seek*) ke timestamp lagu tersebut seketika.
+- **Direct WinRT GSMTC & Hardware Fallback**:
+  - Kompatibel dengan Spotify, Apple Music, Tidal, YouTube, Chrome, Edge, Firefox, dan VLC.
+  - Fallback virtual key hardware Win32 (`keybd_event` untuk `VK_MEDIA_PLAY_PAUSE`, `VK_MEDIA_NEXT_TRACK`, `VK_MEDIA_PREV_TRACK`).
+- **Hardware System Volume Slider**:
+  - Pengatur volume master audio Windows langsung dari notch via interface Win32 Core Audio `IAudioEndpointVolume` (MMDeviceEnumerator).
+- **System Tray & Taskbar Isolation**:
+  - Berjalan murni di system tray icon Windows, disembunyikan sepenuhnya dari taskbar (`WS_EX_TOOLWINDOW` & non-`WS_EX_APPWINDOW`).
+  - Context menu tray: Buka Notch, Toggle Autostart Windows, Cek Versi, dan Keluar.
+- **Native WinRT Toast Notification**:
+  - Notifikasi toast native Windows yang mengumumkan versi aplikasi (`Notch Island v0.1.0`) saat startup dan saat diklik dari menu tray.
+- **Tab Produktivitas Tambahan (Header Carousel)**:
+  - 🎵 **Musik**: Kontrol media GSMTC, seek bar, volume slider, dan tombol lirik.
+  - ⏱️ **Pomodoro Timer**: Pengatur fokus kerja dan jeda istirahat dengan auto-transition serta counter sesi harian.
+  - 💧 **Water Tracker**: Pengingat minum berkala dengan counter gelas harian yang otomatis di-reset setiap pergantian hari.
+  - 📁 **File Shelf**: Rak file serbaguna pendukung drag-and-drop untuk akses cepat file kerja.
+  - ✅ **Todo List**: Daftar tugas sederhana dan praktis.
+- **Persistensi Konfigurasi**:
+  - Seluruh pengaturan tersimpan otomatis di `%APPDATA%\notch-island\config.json`.
 
 ---
 
@@ -45,29 +63,11 @@ cargo build --release
 
 ---
 
-## 🐛 Bug & Keterbatasan yang Masih Ada (Known Issues)
+## ⚙️ Persyaratan Sistem
 
-1. **Sinkronisasi Multi-Player (Audio Focus Conflict)**:
-   - Fallback `keybd_event` mengirimkan sinyal media secara broadcast pada tingkat OS Windows. Jika terdapat lebih dari satu sumber media aktif bersamaan (misalnya Spotify desktop dan video YouTube di Google Chrome), kontrol play/pause dapat mengarah ke pemutar yang terakhir kali memegang fokus audio Windows.
-2. **Keterbatasan Seek API pada Player Tertentu**:
-   - Fungsi scrub maju-mundur menggunakan WinRT `TryChangePlaybackPositionAsync`. Spotify desktop mendukung penuh, namun beberapa pemutar berbasis web/browser tertentu dapat menolak perintah perubahan posisi jika buffer stream belum selesai dimuat.
-3. **Multi-Monitor DPI Hot-Plugging**:
-   - Kalkulasi geometri monitor saat ini membaca monitor utama (`SM_CXSCREEN`). Jika window dipindahkan antar monitor dengan scaling DPI berbeda saat aplikasi berjalan, notch memerlukan restart/re-anchoring geometri agar posisinya kembali presisi di tengah layar.
-4. **Volume Slider Hardware Belum Terintegrasi di UI**:
-   - Kontrol volume audio internal sistem belum memiliki slider visual khusus di antarmuka notch (saat ini masih mengandalkan tombol fisik keyboard atau flyout volume bawaan Windows).
-5. **Background Material Blur (Mica / Acrylic)**:
-   - Kontainer notch saat ini menggunakan warna solid semi-gelap (`#0A0C10`) dengan border tipis transparan; efek blur kaca DWM Acrylic/Mica di belakang window belum diaktifkan.
-
----
-
-## 🔮 Rencana Perbaikan Versi Berikutnya (Next Version Roadmap)
-
-- [ ] **Realtime Audio FFT Spectrum (WASAPI Loopback Capture)**: Mengganti simulasi visualizer sinus dengan pembacaan frekuensi audio loopback PCM asli melalui API WASAPI Windows, sehingga equalizer berdenyut akurat mengikuti ritme lagu.
-- [ ] **Spring-Physics Fluid Animation (Damped Harmonic Oscillator)**: Menerapkan kurva transisi elastis saat ukuran notch membesar (*expand*) dan mengecil (*collapse*) agar terasa mulus dan responsif.
-- [ ] **Windows 11 DWM Mica / Acrylic Surface Blur**: Integrasi `SetWindowCompositionAttribute` / DWM API untuk menghasilkan efek frosted glass di latar belakang notch.
-- [ ] **Persistent User Preferences**: Menyimpan preferensi mode tampilan (`Bar` / `Island`), posisi pinned, dan status lirik ke file konfigurasi lokal (`AppData/Roaming/notch-island/config.json`).
-- [ ] **Hardware Volume & Device Switcher**: Slider volume master interaktif dan pemilih output audio (Speaker / Headphone).
-- [ ] **Local LRC File Drag-and-Drop**: Kemampuan memasukkan file `.lrc` lokal untuk lagu yang tidak tersedia di database LRCLIB.
+- **Sistem Operasi**: Windows 10 (versi 1809 / build 17763 ke atas) atau Windows 11.
+- **Arsitektur**: x86_64.
+- **Toolchain Kompilasi**: Rust 1.85+ (MSVC ABI) & Windows SDK.
 
 ---
 

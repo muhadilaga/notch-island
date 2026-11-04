@@ -13,7 +13,7 @@ use crate::lyrics::{fetch_lyrics_async, LyricLine, LyricsState, SharedLyrics};
 use crate::media::{seek_media_position, send_media_command, MediaTrack, SharedMedia};
 use crate::shelf::{open_file, ShelfState};
 use crate::todo::{PomodoroPhase, PomodoroTimer, TodoState};
-use crate::tray::{build_tray, TrayHandles};
+use crate::tray::{build_tray, show_version_notification, TrayHandles};
 use crate::volume::{get_system_volume, set_system_volume};
 use crate::water::WaterState;
 use crate::window::{DisplayMode, ScreenGeometry};
@@ -70,6 +70,7 @@ pub struct NotchApp {
 }
 
 impl NotchApp {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         shared_media: SharedMedia,
         shared_lyrics: SharedLyrics,
@@ -87,7 +88,7 @@ impl NotchApp {
             shared_interact,
             mode: config.mode,
             is_expanded: false,
-            show_lyrics: config.show_lyrics,
+            show_lyrics: false,
             demo_mode: false,
             demo_track_idx: 0,
             geometry: ScreenGeometry::current(),
@@ -111,7 +112,10 @@ impl NotchApp {
             shelf: shelf_state,
             volume: get_system_volume().unwrap_or(0.5),
             // Best-effort: a failed tray build just means no tray icon.
-            tray: build_tray(is_autostart_enabled()),
+            tray: {
+                show_version_notification();
+                build_tray(is_autostart_enabled())
+            },
         }
     }
 
@@ -220,6 +224,8 @@ impl eframe::App for NotchApp {
             if let Some(tray) = &self.tray {
                 if event.id == tray.quit_id {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                } else if event.id == tray.version_id {
+                    show_version_notification();
                 } else if event.id == tray.show_id {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -237,8 +243,7 @@ impl eframe::App for NotchApp {
 
         // Dinamis sesuaikan ukuran viewport window hanya ketika berubah
         let ppp = ctx.pixels_per_point().max(1.0);
-        let has_active_lyrics = self.show_lyrics
-            || (!lyrics_state.lines.is_empty() && current_track.is_playing)
+        let has_active_lyrics = (self.show_lyrics && self.view == PanelView::Music)
             // Todo/Shelf views need the tall panel too, or their
             // content would clip at the 195 px short height. (Only
             // while expanded: collapsing keeps the normal bar width.)
@@ -328,9 +333,11 @@ impl eframe::App for NotchApp {
                 let max_rect = ui.max_rect();
                 let is_hovered = ui.rect_contains_pointer(max_rect);
 
+                let pin_expanded = self.show_lyrics && self.view == PanelView::Music;
+
                 // State machine interaksi hover & expand
                 if !self.is_expanded {
-                    if is_hovered && !self.collapse_latched {
+                    if (is_hovered || pin_expanded) && !self.collapse_latched {
                         self.is_expanded = true;
                         self.hover_exit_instant = None;
                     } else if !is_hovered {
@@ -339,14 +346,14 @@ impl eframe::App for NotchApp {
                         self.collapse_latched = false;
                     }
                 } else {
-                    if is_hovered {
+                    if is_hovered || pin_expanded {
                         self.hover_exit_instant = None;
                     } else {
                         match self.hover_exit_instant {
                             None => self.hover_exit_instant = Some(Instant::now()),
                             Some(exit_time) => {
                                 // Debounce collapse ala Nusa: 150 ms
-                                // (dulu 350 ms) sebelum menciut.
+                                // sebelum menciut.
                                 if exit_time.elapsed().as_millis() > 150 {
                                     self.is_expanded = false;
                                     self.hover_exit_instant = None;
@@ -656,15 +663,19 @@ impl NotchApp {
                 {
                     self.show_lyrics = !self.show_lyrics;
                     self.save_config();
-                    if self.show_lyrics && lyrics.lines.is_empty() && !lyrics.is_loading {
-                        self.shared_lyrics.lock().unwrap().current_key.clear();
-                        fetch_lyrics_async(
-                            Arc::clone(&self.shared_lyrics),
-                            Arc::clone(&self.lyrics_cache),
-                            track.artist.clone(),
-                            track.title.clone(),
-                            track.duration_ms / 1000,
-                        );
+                    if self.show_lyrics {
+                        self.is_expanded = true;
+                        self.collapse_latched = false;
+                        if lyrics.lines.is_empty() && !lyrics.is_loading {
+                            self.shared_lyrics.lock().unwrap().current_key.clear();
+                            fetch_lyrics_async(
+                                Arc::clone(&self.shared_lyrics),
+                                Arc::clone(&self.lyrics_cache),
+                                track.artist.clone(),
+                                track.title.clone(),
+                                track.duration_ms / 1000,
+                            );
+                        }
                     }
                 }
             });
@@ -996,6 +1007,8 @@ impl NotchApp {
                     .clicked()
                 {
                     self.is_expanded = false;
+                    self.show_lyrics = false;
+                    self.save_config();
                     self.collapse_latched = true;
                     self.hover_exit_instant = None;
                 }
