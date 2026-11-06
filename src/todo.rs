@@ -281,5 +281,25 @@ mod tests {
         assert_eq!(config.break_mins, 5);
         assert_eq!(config.water_mins, 60);
         assert!(config.show_lyrics);
+        assert_eq!(config.lyric_offset_ms, 0);
+        assert!(!config.enable_media_diag);
+    }
+
+    #[test]
+    fn test_config_lyric_offset_roundtrip() {
+        let json = r#"{
+            "mode": "FloatingIsland",
+            "show_lyrics": true,
+            "lyric_offset_ms": 300,
+            "enable_media_diag": true
+        }"#;
+
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.lyric_offset_ms, 300);
+        assert!(config.enable_media_diag);
+
+        let serialized = serde_json::to_string(&config).unwrap();
+        assert!(serialized.contains("\"lyric_offset_ms\":300"));
+        assert!(serialized.contains("\"enable_media_diag\":true"));
     }
 }

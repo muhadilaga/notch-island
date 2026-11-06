@@ -19,6 +19,23 @@ pub struct MediaTrack {
     pub position_ms: u64,
     pub duration_ms: u64,
     pub source_app: String,
+    pub app_id: String,
+    pub thumbnail: Option<Arc<egui::ColorImage>>,
+    #[allow(dead_code)]
+    pub shuffle: bool,
+    #[allow(dead_code)]
+    pub favorite: bool,
+    pub timeline_pos_secs: f64,
+    pub timeline_age_secs: f64,
+    pub playback_rate: f64,
+    pub update_seq: u64,
+    pub has_session: bool,
+}
+
+impl MediaTrack {
+    pub fn has_media(&self) -> bool {
+        self.has_session && !self.title.trim().is_empty() && self.title != "Tidak ada media aktif"
+    }
 }
 
 impl Default for MediaTrack {
@@ -30,6 +47,15 @@ impl Default for MediaTrack {
             position_ms: 0,
             duration_ms: 180_000,
             source_app: "Windows".to_string(),
+            app_id: String::new(),
+            thumbnail: None,
+            shuffle: false,
+            favorite: false,
+            timeline_pos_secs: 0.0,
+            timeline_age_secs: 0.0,
+            playback_rate: 1.0,
+            update_seq: 0,
+            has_session: false,
         }
     }
 }
@@ -46,6 +72,9 @@ pub fn start_media_poller(shared: SharedMedia) {
         // Interpolasi hanya boleh jalan saat ini true.
         let mut session_alive = false;
         let mut tick: u64 = 0;
+        let mut seq: u64 = 0;
+        let mut thumb_cache: std::collections::HashMap<String, Option<Arc<egui::ColorImage>>> =
+            std::collections::HashMap::new();
 
         loop {
             // Tick 100 ms: poll asli tiap 5 tick (500 ms, seperti
@@ -56,8 +85,11 @@ pub fn start_media_poller(shared: SharedMedia) {
             let mut current = shared.lock().unwrap();
 
             if tick % 5 == 0 {
-                match poll_windows_media() {
-                    Ok(Some(track)) => {
+                match poll_windows_media(&mut thumb_cache) {
+                    Ok(Some(mut track)) => {
+                        seq = seq.wrapping_add(1);
+                        track.update_seq = seq;
+                        track.has_session = true;
                         *current = track;
                         simulated_ms = current.position_ms;
                         last_real_update = std::time::Instant::now();
@@ -71,10 +103,13 @@ pub fn start_media_poller(shared: SharedMedia) {
                         // Sekarang: bekukan posisi, tandai berhenti.
                         session_alive = false;
                         current.is_playing = false;
+                        current.has_session = false;
+                        current.title = "Tidak ada media aktif".to_string();
                     }
                     Err(_) => {
                         // Poll gagal: jangan interpolasi buta.
                         session_alive = false;
+                        current.has_session = false;
                     }
                 }
             } else if session_alive && current.is_playing {
@@ -127,7 +162,9 @@ fn resolve_smtc_session(
     manager.GetCurrentSession().ok()
 }
 
-fn poll_windows_media() -> Result<Option<MediaTrack>, Box<dyn std::error::Error>> {
+fn poll_windows_media(
+    thumb_cache: &mut std::collections::HashMap<String, Option<Arc<egui::ColorImage>>>,
+) -> Result<Option<MediaTrack>, Box<dyn std::error::Error>> {
     let async_op = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?;
     let manager = async_op.get()?;
     let session = match resolve_smtc_session(&manager) {
@@ -145,7 +182,7 @@ fn poll_windows_media() -> Result<Option<MediaTrack>, Box<dyn std::error::Error>
     } else if source_id.is_empty() {
         "Media Player".to_string()
     } else {
-        source_id
+        source_id.clone()
     };
 
     let media_props = session.TryGetMediaPropertiesAsync()?.get()?;
@@ -156,17 +193,67 @@ fn poll_windows_media() -> Result<Option<MediaTrack>, Box<dyn std::error::Error>
         return Ok(None);
     }
 
+    let song_key = format!("{} - {}", artist.trim(), title.trim());
+    let thumbnail = if let Some(cached) = thumb_cache.get(&song_key) {
+        cached.clone()
+    } else {
+        let decoded = match media_props.Thumbnail() {
+            Ok(thumb_ref) => match thumb_ref.OpenReadAsync() {
+                Ok(op) => match op.get() {
+                    Ok(stream) => match read_stream_bytes(&stream) {
+                        Ok(bytes) if !bytes.is_empty() => {
+                            decode_thumbnail(&bytes).map(Arc::new)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        };
+        if thumb_cache.len() >= 32 {
+            thumb_cache.clear();
+        }
+        thumb_cache.insert(song_key, decoded.clone());
+        decoded
+    };
+
     let playback_info = session.GetPlaybackInfo()?;
     let is_playing = playback_info.PlaybackStatus()? == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing;
 
+    let mut playback_rate = 1.0;
+    if let Ok(rate_ref) = playback_info.PlaybackRate() {
+        if let Ok(rate_val) = rate_ref.Value() {
+            if rate_val > 0.0 {
+                playback_rate = rate_val;
+            }
+        }
+    }
+
     let mut position_ms = 0;
     let mut duration_ms = 0;
+    let mut timeline_pos_secs = 0.0;
+    let mut timeline_age_secs = 0.0;
     if let Ok(timeline) = session.GetTimelineProperties() {
         if let Ok(pos) = timeline.Position() {
             position_ms = (pos.Duration / 10_000) as u64; // 100ns units to ms
+            timeline_pos_secs = pos.Duration as f64 / 10_000_000.0;
         }
         if let Ok(end) = timeline.EndTime() {
             duration_ms = (end.Duration / 10_000) as u64;
+        }
+        if let Ok(lut) = timeline.LastUpdatedTime() {
+            if lut.UniversalTime > 0 {
+                let now_filetime = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| (d.as_nanos() / 100) as i64 + 116_444_736_000_000_000)
+                    .unwrap_or(0);
+                if now_filetime >= lut.UniversalTime {
+                    timeline_age_secs =
+                        ((now_filetime - lut.UniversalTime) as f64 / 10_000_000.0).clamp(0.0, 10.0);
+                }
+            }
         }
     }
 
@@ -177,6 +264,15 @@ fn poll_windows_media() -> Result<Option<MediaTrack>, Box<dyn std::error::Error>
         position_ms,
         duration_ms,
         source_app: app_name,
+        app_id: source_id,
+        thumbnail,
+        shuffle: false,
+        favorite: false,
+        timeline_pos_secs,
+        timeline_age_secs,
+        playback_rate,
+        update_seq: 0,
+        has_session: true,
     }))
 }
 
@@ -236,4 +332,115 @@ pub fn seek_media_position(position_ms: u64) {
             }
         }
     });
+}
+
+use windows::Storage::Streams::{DataReader, IRandomAccessStreamWithContentType};
+
+fn read_stream_bytes(stream: &IRandomAccessStreamWithContentType) -> windows::core::Result<Vec<u8>> {
+    let size = stream.Size()? as u32;
+    if size == 0 {
+        return Ok(Vec::new());
+    }
+    let reader = DataReader::CreateDataReader(stream)?;
+    reader.LoadAsync(size)?.get()?;
+    let mut bytes = vec![0u8; size as usize];
+    reader.ReadBytes(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn decode_thumbnail(bytes: &[u8]) -> Option<egui::ColorImage> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        [w as usize, h as usize],
+        rgba.as_raw(),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_media_track_has_media() {
+        let mut track = MediaTrack::default();
+        assert!(!track.has_media());
+
+        track.has_session = true;
+        track.title = "Song Title".to_string();
+        assert!(track.has_media());
+
+        track.title = "Tidak ada media aktif".to_string();
+        assert!(!track.has_media());
+
+        track.title = "   ".to_string();
+        assert!(!track.has_media());
+    }
+
+    #[test]
+    fn test_stream_fn() {
+        let _ = read_stream_bytes;
+        let _ = decode_thumbnail;
+    }
+
+    #[test]
+    fn test_decode_thumbnail() {
+        assert!(decode_thumbnail(&[]).is_none());
+        assert!(decode_thumbnail(b"invalid image bytes").is_none());
+
+        let img = image::RgbaImage::new(2, 2);
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        let decoded = decode_thumbnail(bytes.get_ref());
+        assert!(decoded.is_some());
+        let color_img = decoded.unwrap();
+        assert_eq!(color_img.size, [2, 2]);
+    }
+
+    #[test]
+    fn test_live_smtc_session_query() {
+        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        let mut thumb_cache = HashMap::new();
+        match poll_windows_media(&mut thumb_cache) {
+            Ok(Some(track)) => {
+                println!(
+                    "Live SMTC found: app_id='{}', source_app='{}', title='{}', artist='{}', pos={:.2}s, age={:.3}s, rate={:.2}, playing={}",
+                    track.app_id, track.source_app, track.title, track.artist, track.timeline_pos_secs, track.timeline_age_secs, track.playback_rate, track.is_playing
+                );
+            }
+            Ok(None) => {
+                println!("Live SMTC: No active session or track empty");
+            }
+            Err(e) => {
+                println!("Live SMTC err: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_compare_all_smtc_sessions() {
+        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        if let Ok(op) = GlobalSystemMediaTransportControlsSessionManager::RequestAsync() {
+            if let Ok(manager) = op.get() {
+                if let Ok(sessions) = manager.GetSessions() {
+                    for i in 0..sessions.Size().unwrap_or(0) {
+                        if let Ok(session) = sessions.GetAt(i) {
+                            let app_id = session.SourceAppUserModelId().unwrap_or_default().to_string();
+                            let tl = session.GetTimelineProperties().ok();
+                            let pos = tl.as_ref().and_then(|t| t.Position().ok()).map(|p| p.Duration).unwrap_or(0);
+                            let lut = tl.as_ref().and_then(|t| t.LastUpdatedTime().ok()).map(|l| l.UniversalTime).unwrap_or(0);
+                            let pi = session.GetPlaybackInfo().ok();
+                            let status = pi.as_ref().and_then(|p| p.PlaybackStatus().ok());
+                            let rate = pi.as_ref().and_then(|p| p.PlaybackRate().ok()).and_then(|r| r.Value().ok());
+                            let props = session.TryGetMediaPropertiesAsync().ok().and_then(|op| op.get().ok());
+                            let title = props.as_ref().map(|p| p.Title().unwrap_or_default().to_string()).unwrap_or_default();
+                            println!("Session #{}: app_id='{}', title='{}', pos_ms={}, lut={}, status={:?}, rate={:?}", i, app_id, title, pos / 10_000, lut, status, rate);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

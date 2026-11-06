@@ -31,9 +31,10 @@ impl ScreenGeometry {
         mode: DisplayMode,
         is_expanded: bool,
         has_lyrics: bool,
-        is_playing: bool,
+        _is_playing: bool,
         pixels_per_point: f32,
         thin_line: bool,
+        pill_width: Option<f32>,
     ) -> (f32, f32, f32, f32) {
         let ppp = if pixels_per_point > 0.0 { pixels_per_point } else { 1.0 };
         let logical_screen_w = self.screen_width / ppp;
@@ -46,15 +47,9 @@ impl ScreenGeometry {
 
         let width = if is_expanded {
             if has_lyrics { 580.0 } else { 460.0 }
-        } else if !is_playing {
-            // Slit kamera ala Nusa saat idle/pause: strip 48 px
-            // (bukan pill 140 px berisi dot + jam). Hover di atas
-            // slit tetap mengembang; target hover jadi sekecil
-            // slit (trade-off Nusa, bukan bug).
-            48.0
+        } else if let Some(pw) = pill_width {
+            pw.clamp(140.0, 420.0)
         } else {
-            // Pill play minimal ala Nusa: satu lebar 140 px untuk
-            // semua mode (dulu 280/300/380 px berisi ticker).
             140.0
         };
 
@@ -62,11 +57,8 @@ impl ScreenGeometry {
             // Panel pendek 165 -> 195: ruang baris jam terpusat +
             // header carousel di semua view (bukan cuma lirik).
             if has_lyrics { 300.0 } else { 195.0 }
-        } else if is_playing {
-            36.0
         } else {
-            // Slit idle/pause: tinggi 8 px ala Nusa.
-            8.0
+            36.0
         };
 
         let x = (logical_screen_w - width) / 2.0;
@@ -76,5 +68,101 @@ impl ScreenGeometry {
         };
 
         (x, y, width, height)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calculate_window_rect_pill_animated_width() {
+        let geom = ScreenGeometry {
+            screen_width: 1920.0,
+            screen_height: 1080.0,
+        };
+
+        // 1. Collapsed pill width min 140
+        let (x, y, w, h) = geom.calculate_window_rect(
+            DisplayMode::MinimalBezel,
+            false,
+            false,
+            true,
+            1.0,
+            false,
+            Some(140.0),
+        );
+        assert_eq!(w, 140.0);
+        assert_eq!(h, 36.0);
+        assert_eq!(x, (1920.0 - 140.0) / 2.0);
+        assert_eq!(y, 0.0);
+
+        // 2. Collapsed pill width animated 280
+        let (x, y, w, h) = geom.calculate_window_rect(
+            DisplayMode::MinimalBezel,
+            false,
+            false,
+            true,
+            1.0,
+            false,
+            Some(280.0),
+        );
+        assert_eq!(w, 280.0);
+        assert_eq!(h, 36.0);
+        assert_eq!(x, (1920.0 - 280.0) / 2.0);
+        assert_eq!(y, 0.0);
+
+        // 3. Clamping pill width
+        let (_, _, w_min, _) = geom.calculate_window_rect(
+            DisplayMode::MinimalBezel,
+            false,
+            false,
+            true,
+            1.0,
+            false,
+            Some(100.0),
+        );
+        assert_eq!(w_min, 140.0);
+
+        let (_, _, w_max, _) = geom.calculate_window_rect(
+            DisplayMode::MinimalBezel,
+            false,
+            false,
+            true,
+            1.0,
+            false,
+            Some(500.0),
+        );
+        assert_eq!(w_max, 420.0);
+
+        // 4. Expanded ignores pill_width
+        let (x_exp, y_exp, w_exp, h_exp) = geom.calculate_window_rect(
+            DisplayMode::MinimalBezel,
+            true,
+            false,
+            true,
+            1.0,
+            false,
+            Some(280.0),
+        );
+        assert_eq!(w_exp, 460.0);
+        assert_eq!(h_exp, 195.0);
+        assert_eq!(x_exp, (1920.0 - 460.0) / 2.0);
+        assert_eq!(y_exp, 0.0);
+
+        // 5. Thin line mode
+        let (x_tl, y_tl, w_tl, h_tl) = geom.calculate_window_rect(
+            DisplayMode::MinimalBezel,
+            false,
+            false,
+            true,
+            1.0,
+            true,
+            Some(280.0),
+        );
+        assert_eq!(w_tl, 280.0);
+        assert_eq!(h_tl, 8.0);
+        assert_eq!(x_tl, (1920.0 - 280.0) / 2.0);
+        assert_eq!(y_tl, 0.0);
     }
 }
