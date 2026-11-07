@@ -54,9 +54,9 @@ impl ScreenGeometry {
         };
 
         let height = if is_expanded {
-            // Panel pendek 165 -> 195: ruang baris jam terpusat +
-            // header carousel di semua view (bukan cuma lirik).
-            if has_lyrics { 300.0 } else { 195.0 }
+            // P1: panel musik 144 px; bila lirik tersinkron tampil,
+            // memanjang 58 px menjadi 202 px (LYRIC_SHIFT).
+            if has_lyrics { 202.0 } else { 144.0 }
         } else {
             36.0
         };
@@ -146,11 +146,26 @@ mod tests {
             Some(280.0),
         );
         assert_eq!(w_exp, 460.0);
-        assert_eq!(h_exp, 195.0);
+        assert_eq!(h_exp, 144.0);
         assert_eq!(x_exp, (1920.0 - 460.0) / 2.0);
         assert_eq!(y_exp, 0.0);
 
-        // 5. Thin line mode
+        // 5. Expanded dengan lirik: panel memanjang 144 -> 202 px.
+        let (x_lyr, y_lyr, w_lyr, h_lyr) = geom.calculate_window_rect(
+            DisplayMode::MinimalBezel,
+            true,
+            true,
+            true,
+            1.0,
+            false,
+            Some(280.0),
+        );
+        assert_eq!(w_lyr, 580.0);
+        assert_eq!(h_lyr, 202.0);
+        assert_eq!(x_lyr, (1920.0 - 580.0) / 2.0);
+        assert_eq!(y_lyr, 0.0);
+
+        // 6. Thin line mode
         let (x_tl, y_tl, w_tl, h_tl) = geom.calculate_window_rect(
             DisplayMode::MinimalBezel,
             false,

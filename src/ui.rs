@@ -60,6 +60,15 @@ pub fn select_pill_content(
     }
 }
 
+/// True when the expanded Music panel should show the multi-line
+/// synced-lyrics view (P1): the LRC toggle is on AND synced lyrics
+/// actually exist for the current track. Toggling LRC on with no
+/// lyrics (still loading / not found) leaves the panel at its
+/// normal height — no behavior change without lyrics.
+pub fn lyrics_view_active(show_lyrics: bool, view: PanelView, has_lines: bool) -> bool {
+    show_lyrics && view == PanelView::Music && has_lines
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct CollapseGuard {
     pub last_inside: Instant,
@@ -635,9 +644,13 @@ impl eframe::App for NotchApp {
 
         // Dinamis sesuaikan ukuran viewport window hanya ketika berubah
         let ppp = ctx.pixels_per_point().max(1.0);
-        let has_active_lyrics = (self.show_lyrics && self.view == PanelView::Music)
+        let has_active_lyrics = lyrics_view_active(
+            self.show_lyrics,
+            self.view,
+            !lyrics_state.lines.is_empty(),
+        )
             // Todo/Shelf views need the tall panel too, or their
-            // content would clip at the 195 px short height. (Only
+            // content would clip at the 144 px short height. (Only
             // while expanded: collapsing keeps the normal bar width.)
             || (self.view != PanelView::Music && self.is_expanded);
         // Nusa parity: no thin line. The notch (bar, or expanded panel)
@@ -1415,9 +1428,19 @@ impl NotchApp {
             Color32::from_rgb(150, 150, 153).gamma_multiply(al),
         );
 
-        // Halaman Lirik: di antara header dan progress
-        const LYRIC_SHIFT: f32 = 76.0;
-        if self.show_lyrics {
+        // Halaman Lirik: di antara header dan progress.
+        // P1: LYRIC_SHIFT = 58 px (BUILD_PLAN/CLONE_SPEC) — panel
+        // memanjang 144 -> 202 px dan kontrol/progress bergeser
+        // turun sebesar ini. Zona hanya tampil bila lirik
+        // benar-benar ada; tanpa lirik panel tetap 144 px
+        // (cabang loading/kosong di bawah jadi pengaman saja).
+        const LYRIC_SHIFT: f32 = 58.0;
+        let lyrics_active = lyrics_view_active(
+            self.show_lyrics,
+            self.view,
+            !lyrics.lines.is_empty(),
+        );
+        if lyrics_active {
             let lyric_zone = Rect::from_min_max(
                 pos2(body.left() + PAD, body.top() + 66.0),
                 pos2(body.right() - PAD, body.top() + 66.0 + LYRIC_SHIFT + 8.0),
@@ -1455,8 +1478,16 @@ impl NotchApp {
                     let d = off.abs();
                     let y = cy + off * spacing;
                     let size = 16.0 - (d.min(1.0) * 3.5);
-                    let line_al = (1.0 - d * 0.42).clamp(0.0, 1.0);
-                    let col = if d < 0.5 {
+                    // Baris aktif: putih penuh. Baris non-aktif:
+                    // abu-abu transparan, alpha dibatasi maks 50%
+                    // (spec P1: ~40-50%) dan memudar dengan jarak.
+                    let is_active = d < 0.5;
+                    let line_al = if is_active {
+                        1.0
+                    } else {
+                        (1.0 - d * 0.42).clamp(0.0, 0.5)
+                    };
+                    let col = if is_active {
                         Color32::WHITE
                     } else {
                         Color32::from_rgb(150, 150, 155)
@@ -1490,13 +1521,24 @@ impl NotchApp {
                         );
                     }
 
-                    p_lyric.text(
-                        pos2(lyric_zone.center().x, y),
-                        Align2::CENTER_CENTER,
-                        text,
-                        FontId::proportional(size),
-                        col.gamma_multiply(line_al),
-                    );
+                    // Baris aktif digambar tebal (bold sintetis:
+                    // dua kali gambar dengan geser 0.7 px — egui
+                    // tidak menyediakan font bold bawaan).
+                    let text_pos = pos2(lyric_zone.center().x, y);
+                    let font = FontId::proportional(size);
+                    let text_col = col.gamma_multiply(line_al);
+                    if is_active {
+                        p_lyric.text(text_pos, Align2::CENTER_CENTER, text, font.clone(), text_col);
+                        p_lyric.text(
+                            text_pos + vec2(0.7, 0.0),
+                            Align2::CENTER_CENTER,
+                            text,
+                            font,
+                            text_col,
+                        );
+                    } else {
+                        p_lyric.text(text_pos, Align2::CENTER_CENTER, text, font, text_col);
+                    }
                 }
             }
         }
@@ -1504,7 +1546,7 @@ impl NotchApp {
         // Transient HUD untuk Offset Lirik (+/-100 ms)
         if let Some(until) = self.lyric_offset_hud_until {
             if Instant::now() < until {
-                let hud_y = body.top() + if self.show_lyrics { 70.0 } else { 45.0 };
+                let hud_y = body.top() + if lyrics_active { 70.0 } else { 45.0 };
                 let hud_rect = Rect::from_center_size(
                     pos2(body.center().x, hud_y),
                     vec2(160.0, 24.0),
@@ -1528,7 +1570,7 @@ impl NotchApp {
         }
 
         // Baris 2 (y~88): progress bar
-        let py = body.top() + 88.0 + if self.show_lyrics { LYRIC_SHIFT } else { 0.0 };
+        let py = body.top() + 88.0 + if lyrics_active { LYRIC_SHIFT } else { 0.0 };
 
         // Waktu berjalan kiri (10.5 px abu)
         let el_str = fmt_time(track.position_ms);
@@ -1609,7 +1651,7 @@ impl NotchApp {
         }
 
         // Baris 3 (y~118): kontrol, 5 ikon vektor digambar dengan painter pada posisi 10%, 30%, 50%, 70%, 90%
-        let cy = body.top() + 118.0 + if self.show_lyrics { LYRIC_SHIFT } else { 0.0 };
+        let cy = body.top() + 118.0 + if lyrics_active { LYRIC_SHIFT } else { 0.0 };
         let inner = body.width() - PAD * 2.0;
 
         let c_shuffle = pos2(body.left() + PAD + inner * 0.10, cy);
@@ -2040,6 +2082,20 @@ mod tests {
             select_pill_content(true, false, true),
             PillContentKind::Title
         );
+    }
+
+    #[test]
+    fn test_lyrics_view_active_requires_lines() {
+        // LRC on + view Musik + lirik ada -> aktif.
+        assert!(lyrics_view_active(true, PanelView::Music, true));
+        // LRC on tapi lirik belum ada (loading / tidak ditemukan)
+        // -> panel tetap pendek, tanpa perubahan perilaku.
+        assert!(!lyrics_view_active(true, PanelView::Music, false));
+        // LRC off -> tidak aktif walau lirik ada.
+        assert!(!lyrics_view_active(false, PanelView::Music, true));
+        // View Todo/Shelf bukan tampilan lirik.
+        assert!(!lyrics_view_active(true, PanelView::Todo, true));
+        assert!(!lyrics_view_active(true, PanelView::Shelf, true));
     }
 
     #[test]
