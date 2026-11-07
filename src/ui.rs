@@ -25,7 +25,7 @@ pub fn safe_lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         Err(poisoned) => poisoned.into_inner(),
     }
 }
-use crate::water::WaterState;
+use crate::water::{fmt_hhmm, WaterState};
 use crate::window::{DisplayMode, EAR_RADIUS, ScreenGeometry};
 
 use tray_icon::menu::MenuEvent;
@@ -378,9 +378,11 @@ impl NotchApp {
         .save();
     }
 
-    /// True when the water reminder interval has elapsed.
+    /// True when the water reminder interval has elapsed (P3: also
+    /// gated by the water state — reminders enabled, inside the
+    /// active hours, and the daily goal not yet reached).
     fn water_due(&self) -> bool {
-        Instant::now() >= self.water_next_due
+        self.water.reminder_active() && Instant::now() >= self.water_next_due
     }
 
     fn apply_demo_track(&mut self) {
@@ -1023,6 +1025,44 @@ fn fill_fan(p: &egui::Painter, center: Pos2, corner: Pos2, r: f32, a0: f32, a1: 
         mesh.add_triangle(0, i as u32, (i + 1) as u32);
     }
     p.add(egui::Shape::mesh(mesh));
+}
+
+/// Riwayat air 24 jam (P3): 24 batang vertikal, satu per jam.
+/// Batang kosong digambar sebagai garis dasar 2 px abu-abu; label
+/// jam 0 / 6 / 12 / 18 di bawah batang.
+fn draw_hourly_bars(p: &egui::Painter, rect: Rect, hours: &[u32; 24]) {
+    let max = hours.iter().copied().max().unwrap_or(0).max(1);
+    let gap = 3.0;
+    let bw = ((rect.width() - gap * 23.0) / 24.0).max(2.0);
+    let label_h = 10.0;
+    let bars = Rect::from_min_max(rect.left_top(), pos2(rect.right(), rect.bottom() - label_h));
+    for (i, &v) in hours.iter().enumerate() {
+        let x0 = rect.left() + i as f32 * (bw + gap);
+        let h = if v == 0 {
+            2.0
+        } else {
+            (v as f32 / max as f32) * (bars.height() - 2.0) + 2.0
+        };
+        let bar = Rect::from_min_max(pos2(x0, bars.bottom() - h), pos2(x0 + bw, bars.bottom()));
+        let col = if v == 0 {
+            Color32::from_rgb(60, 60, 66)
+        } else {
+            Color32::from_rgb(100, 200, 255)
+        };
+        p.rect_filled(bar, CornerRadius::same(2), col);
+    }
+    let font = FontId::proportional(9.0);
+    let col = Color32::from_rgb(150, 155, 165);
+    for h in [0, 6, 12, 18] {
+        let x = rect.left() + h as f32 * (bw + gap);
+        p.text(
+            pos2(x, rect.bottom() - label_h),
+            Align2::LEFT_TOP,
+            format!("{}", h),
+            font.clone(),
+            col,
+        );
+    }
 }
 
 fn draw_art(p: &egui::Painter, r: Rect, rounding: u8, tex: Option<&egui::TextureHandle>, al: f32) {
@@ -1992,19 +2032,47 @@ impl NotchApp {
                     }
                 });
             ui.add_space(4.0);
+            // Water tracker (P3): mL metrics + 24h history.
             ui.horizontal(|ui| {
                 ui.add_space(14.0);
-                let water_text = format!("💧 {} gelas hari ini", self.water.count_today);
+                let water_text =
+                    format!("💧 {} / {} mL", self.water.taken_ml, self.water.goal_ml);
                 ui.label(
                     RichText::new(water_text)
                         .font(FontId::proportional(11.0))
                         .color(Color32::from_rgb(100, 200, 255)),
                 );
-                if ui.button(RichText::new("+1 Minum").font(FontId::proportional(11.0))).clicked() {
-                    self.water.count_today += 1;
+                ui.label(
+                    RichText::new(format!(
+                        "· botol {} mL · aktif {}–{}",
+                        self.water.bottle_ml,
+                        fmt_hhmm(self.water.start_min),
+                        fmt_hhmm(self.water.end_min)
+                    ))
+                    .font(FontId::proportional(11.0))
+                    .color(Color32::from_rgb(150, 155, 165)),
+                );
+                if ui.button(RichText::new("+1 Botol").font(FontId::proportional(11.0))).clicked() {
+                    self.water.add_drink();
                     self.water.save();
                     self.water_next_due = Instant::now() + Duration::from_secs(self.water_mins * 60);
                 }
+            });
+            // Riwayat 24 jam (per jam, mL) + caption.
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.add_space(14.0);
+                let w = (ui.available_width() - 14.0).max(60.0);
+                let (rect, _) = ui.allocate_exact_size(vec2(w, 30.0), Sense::hover());
+                draw_hourly_bars(ui.painter(), rect, &self.water.hourly_log);
+            });
+            ui.horizontal(|ui| {
+                ui.add_space(14.0);
+                ui.label(
+                    RichText::new("Riwayat 24 jam (per jam, mL)")
+                        .font(FontId::proportional(10.0))
+                        .color(Color32::from_rgb(150, 155, 165)),
+                );
             });
 
             // Ukur tinggi konten untuk target geometri frame berikut.
