@@ -26,7 +26,7 @@ pub fn safe_lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     }
 }
 use crate::water::WaterState;
-use crate::window::{DisplayMode, ScreenGeometry};
+use crate::window::{DisplayMode, EAR_RADIUS, ScreenGeometry};
 
 use tray_icon::menu::MenuEvent;
 
@@ -67,6 +67,25 @@ pub fn select_pill_content(
 /// normal height — no behavior change without lyrics.
 pub fn lyrics_view_active(show_lyrics: bool, view: PanelView, has_lines: bool) -> bool {
     show_lyrics && view == PanelView::Music && has_lines
+}
+
+/// Bodi notch dari rect jendela (P2): jendela EAR_RADIUS lebih lebar
+/// dari bodi di tiap sisi; bodi = jendela dikurangi EAR_RADIUS di
+/// kiri/kanan. Bodi tetap di posisi & ukuran lama — hanya jendela
+/// yang melebar 24 px untuk strip telinga.
+pub fn body_rect_for_window(window_rect: Rect) -> Rect {
+    Rect::from_min_max(
+        pos2(window_rect.left() + EAR_RADIUS, window_rect.top()),
+        pos2(window_rect.right() - EAR_RADIUS, window_rect.bottom()),
+    )
+}
+
+/// True bila telinga cekung bisa digambar bersih untuk bodi sebesar
+/// ini (P2): telinga setinggi 12 px dan butuh ruang datar di antara
+/// kedua telinga. Status pendek/sempit (thin line 280x8) kembali
+/// ke bentuk lama (sudut atas rata).
+pub fn ears_fit(body_w: f32, body_h: f32) -> bool {
+    body_h >= EAR_RADIUS && body_w >= 4.0 * EAR_RADIUS
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -733,12 +752,15 @@ impl eframe::App for NotchApp {
             }
         }
 
-        // Publish rect notch (piksel fisik) untuk mouse hook
+        // Publish rect notch (piksel fisik) untuk mouse hook.
+        // P2: rect = bodi (jendela dikurangi strip telinga 12 px
+        // di tiap sisi) agar hover/click-through tidak berubah:
+        // strip transparan di samping bodi tetap tembus klik.
         let notch_rect = if self.last_applied_size.0 > 0.0 && self.last_applied_size.1 > 0.0 {
             Some(NotchRect {
-                x: (self.last_applied_pos.0 * ppp) as i32,
+                x: ((self.last_applied_pos.0 + EAR_RADIUS) * ppp) as i32,
                 y: (self.last_applied_pos.1 * ppp) as i32,
-                w: (self.last_applied_size.0 * ppp) as i32,
+                w: ((self.last_applied_size.0 - 2.0 * EAR_RADIUS) * ppp) as i32,
                 h: (self.last_applied_size.1 * ppp) as i32,
             })
         } else {
@@ -754,8 +776,15 @@ impl eframe::App for NotchApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(Color32::TRANSPARENT))
             .show(ctx, |ui| {
-                let max_rect = ui.max_rect();
-                let is_hovered = ui.rect_contains_pointer(max_rect);
+                let window_rect = ui.max_rect();
+                // P2: bodi notch = jendela dikurangi strip telinga
+                // 12 px di kiri/kanan. Hover memakai bodi (bukan
+                // jendela) agar strip transparan di samping bodi
+                // tidak memicu expand.
+                let body_rect = body_rect_for_window(window_rect);
+                let is_hovered = ctx
+                    .input(|i| i.pointer.hover_pos())
+                    .map_or(false, |p| body_rect.contains(p));
                 let mouse_down = ctx.input(|i| i.pointer.any_down());
 
                 let pin_expanded = self.show_lyrics && self.view == PanelView::Music;
@@ -791,12 +820,28 @@ impl eframe::App for NotchApp {
                 let border_stroke = Stroke::NONE;
                 let margin = egui::Margin::ZERO;
 
-                // Kontainer Notch dengan Margin rapi di dalam kanvas
+                // P2: telinga cekung 12 px di sudut atas bodi,
+                // collapsed maupun expanded. Digambar dengan
+                // painter kanvas (clip = jendela): telinga menjorok
+                // 12 px ke luar bodi dan akan terpotong bila
+                // digambar di dalam bodi. Selalu aktif (bukan lagi
+                // gating enable_fillet); bila bodi terlalu pendek /
+                // sempit, kembali ke sudut atas rata.
+                if ears_fit(body_rect.width(), body_rect.height()) {
+                    let p_ears = ui.painter();
+                    draw_ear(&p_ears, body_rect.left_top(), true);
+                    draw_ear(&p_ears, body_rect.right_top(), false);
+                }
+
+                // Kontainer Notch dengan Margin rapi di dalam kanvas.
+                // outer_margin kiri/kanan 12 px: bodi tetap di
+                // posisi & ukuran lama, strip luarnya untuk telinga.
                 egui::Frame::NONE
                     .fill(bg_color)
                     .corner_radius(radius)
                     .stroke(border_stroke)
                     .inner_margin(margin)
+                    .outer_margin(egui::Margin::symmetric(EAR_RADIUS as i8, 0))
                     .show(ui, |ui| {
                         if !self.is_expanded {
                             self.render_collapsed_notch(
@@ -950,7 +995,7 @@ impl NotchApp {
 }
 
 fn draw_ear(p: &egui::Painter, corner: Pos2, is_left: bool) {
-    let r = 12.0;
+    let r = EAR_RADIUS;
     let center = if is_left {
         pos2(corner.x - r, corner.y + r)
     } else {
@@ -1266,12 +1311,10 @@ impl NotchApp {
             self.playing_factor,
         );
 
-        // Fillet / telinga cekung 12 px (hanya jika enable_fillet di config)
-        if self.enable_fillet {
-            draw_ear(&p, body.left_top(), true);
-            draw_ear(&p, body.right_top(), false);
-        }
-
+        // P2: telinga cekung digambar sekali di update() untuk
+        // semua status (collapsed + expanded). Panggilan lama di
+        // sini memakai painter bodi (clip = bodi), padahal telinga
+        // menjorok 12 px ke luar bodi — jadi tidak pernah terlihat.
         // Volume: scroll mouse di atas notch mengubah volume sistem
         let scroll_y = ui.input(|i| i.raw_scroll_delta.y);
         if is_hovered && scroll_y.abs() > 0.1 {
@@ -2096,6 +2139,30 @@ mod tests {
         // View Todo/Shelf bukan tampilan lirik.
         assert!(!lyrics_view_active(true, PanelView::Todo, true));
         assert!(!lyrics_view_active(true, PanelView::Shelf, true));
+    }
+
+    #[test]
+    fn test_ears_body_rect_and_fit() {
+        // Jendela 484x144 (panel musik) -> bodi 460x144, geser 12 px ke kanan.
+        let win = Rect::from_min_max(pos2(718.0, 0.0), pos2(1202.0, 144.0));
+        let body = body_rect_for_window(win);
+        assert_eq!(body.left(), 730.0);
+        assert_eq!(body.right(), 1190.0);
+        assert_eq!(body.width(), 460.0);
+        assert_eq!(body.height(), 144.0);
+        assert_eq!(body.top(), 0.0);
+
+        // Status normal: telinga muat.
+        assert!(ears_fit(140.0, 36.0)); // pill collapsed min
+        assert!(ears_fit(420.0, 36.0)); // pill collapsed max
+        assert!(ears_fit(460.0, 144.0)); // panel musik
+        assert!(ears_fit(580.0, 202.0)); // panel lirik
+
+        // Status pendek/sempit: kembali ke sudut atas rata.
+        assert!(!ears_fit(280.0, 8.0)); // thin line
+        assert!(!ears_fit(48.0, 8.0)); // slit minimum
+        assert!(!ears_fit(140.0, 8.0)); // tinggi < 12 px
+        assert!(!ears_fit(24.0, 36.0)); // lebar < 48 px
     }
 
     #[test]

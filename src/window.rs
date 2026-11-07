@@ -8,6 +8,13 @@ pub enum DisplayMode {
     MinimalBezel,
 }
 
+/// Radius telinga cekung (P2): sudut atas notch menjorok 12 px ke
+/// luar bodi di tiap sisi agar menyatu mulus dengan bezel layar.
+/// Jendela OS selalu 2*EAR_RADIUS lebih lebar dari bodi; bodi =
+/// jendela dikurangi EAR_RADIUS di kiri/kanan (lihat
+/// `body_rect_for_window` di ui.rs).
+pub const EAR_RADIUS: f32 = 12.0;
+
 pub struct ScreenGeometry {
     pub screen_width: f32,
     #[allow(dead_code)]
@@ -42,16 +49,26 @@ impl ScreenGeometry {
         if thin_line {
             // Garis tipis ala Nusa Minimal notch: tetap terlihat dan
             // tetap bisa di-hover, tanpa teks atau konten.
-            return ((logical_screen_w - 280.0) / 2.0, 0.0, 280.0, 8.0);
+            // Lebar jendela sudah termasuk strip telinga (P2).
+            return (
+                (logical_screen_w - (280.0 + 2.0 * EAR_RADIUS)) / 2.0,
+                0.0,
+                280.0 + 2.0 * EAR_RADIUS,
+                8.0,
+            );
         }
 
-        let width = if is_expanded {
+        let body_width = if is_expanded {
             if has_lyrics { 580.0 } else { 460.0 }
         } else if let Some(pw) = pill_width {
             pw.clamp(140.0, 420.0)
         } else {
             140.0
         };
+        // P2: jendela OS 2*EAR_RADIUS lebih lebar dari bodi agar
+        // telinga cekung 12 px punya ruang gambar di tiap sisi.
+        // Bodi tetap di posisi & ukuran lama.
+        let width = body_width + 2.0 * EAR_RADIUS;
 
         let height = if is_expanded {
             // P1: panel musik 144 px; bila lirik tersinkron tampil,
@@ -82,7 +99,10 @@ mod tests {
             screen_height: 1080.0,
         };
 
-        // 1. Collapsed pill width min 140
+        // P2: semua lebar jendela = bodi + 2*EAR_RADIUS (24 px)
+        // untuk strip telinga; bodi tetap di ukuran lama.
+
+        // 1. Collapsed pill width min 140 -> jendela 164
         let (x, y, w, h) = geom.calculate_window_rect(
             DisplayMode::MinimalBezel,
             false,
@@ -92,12 +112,12 @@ mod tests {
             false,
             Some(140.0),
         );
-        assert_eq!(w, 140.0);
+        assert_eq!(w, 164.0);
         assert_eq!(h, 36.0);
-        assert_eq!(x, (1920.0 - 140.0) / 2.0);
+        assert_eq!(x, (1920.0 - 164.0) / 2.0);
         assert_eq!(y, 0.0);
 
-        // 2. Collapsed pill width animated 280
+        // 2. Collapsed pill width animated 280 -> jendela 304
         let (x, y, w, h) = geom.calculate_window_rect(
             DisplayMode::MinimalBezel,
             false,
@@ -107,9 +127,9 @@ mod tests {
             false,
             Some(280.0),
         );
-        assert_eq!(w, 280.0);
+        assert_eq!(w, 304.0);
         assert_eq!(h, 36.0);
-        assert_eq!(x, (1920.0 - 280.0) / 2.0);
+        assert_eq!(x, (1920.0 - 304.0) / 2.0);
         assert_eq!(y, 0.0);
 
         // 3. Clamping pill width
@@ -122,7 +142,7 @@ mod tests {
             false,
             Some(100.0),
         );
-        assert_eq!(w_min, 140.0);
+        assert_eq!(w_min, 164.0);
 
         let (_, _, w_max, _) = geom.calculate_window_rect(
             DisplayMode::MinimalBezel,
@@ -133,9 +153,9 @@ mod tests {
             false,
             Some(500.0),
         );
-        assert_eq!(w_max, 420.0);
+        assert_eq!(w_max, 444.0);
 
-        // 4. Expanded ignores pill_width
+        // 4. Expanded ignores pill_width (460 -> 484)
         let (x_exp, y_exp, w_exp, h_exp) = geom.calculate_window_rect(
             DisplayMode::MinimalBezel,
             true,
@@ -145,12 +165,12 @@ mod tests {
             false,
             Some(280.0),
         );
-        assert_eq!(w_exp, 460.0);
+        assert_eq!(w_exp, 484.0);
         assert_eq!(h_exp, 144.0);
-        assert_eq!(x_exp, (1920.0 - 460.0) / 2.0);
+        assert_eq!(x_exp, (1920.0 - 484.0) / 2.0);
         assert_eq!(y_exp, 0.0);
 
-        // 5. Expanded dengan lirik: panel memanjang 144 -> 202 px.
+        // 5. Expanded dengan lirik: panel memanjang 144 -> 202 px (580 -> 604).
         let (x_lyr, y_lyr, w_lyr, h_lyr) = geom.calculate_window_rect(
             DisplayMode::MinimalBezel,
             true,
@@ -160,12 +180,12 @@ mod tests {
             false,
             Some(280.0),
         );
-        assert_eq!(w_lyr, 580.0);
+        assert_eq!(w_lyr, 604.0);
         assert_eq!(h_lyr, 202.0);
-        assert_eq!(x_lyr, (1920.0 - 580.0) / 2.0);
+        assert_eq!(x_lyr, (1920.0 - 604.0) / 2.0);
         assert_eq!(y_lyr, 0.0);
 
-        // 6. Thin line mode
+        // 6. Thin line mode (280 -> 304)
         let (x_tl, y_tl, w_tl, h_tl) = geom.calculate_window_rect(
             DisplayMode::MinimalBezel,
             false,
@@ -175,9 +195,9 @@ mod tests {
             true,
             Some(280.0),
         );
-        assert_eq!(w_tl, 280.0);
+        assert_eq!(w_tl, 304.0);
         assert_eq!(h_tl, 8.0);
-        assert_eq!(x_tl, (1920.0 - 280.0) / 2.0);
+        assert_eq!(x_tl, (1920.0 - 304.0) / 2.0);
         assert_eq!(y_tl, 0.0);
     }
 }
